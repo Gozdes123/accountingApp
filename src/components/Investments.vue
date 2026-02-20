@@ -3,6 +3,7 @@ import { ref, onMounted, computed } from 'vue'
 import { supabase } from '../lib/supabaseClient'
 import { Chart as ChartJS, ArcElement, Tooltip, Legend } from 'chart.js'
 import { Doughnut } from 'vue-chartjs'
+import { PhEye, PhEyeSlash } from '@phosphor-icons/vue'
 
 ChartJS.register(ArcElement, Tooltip, Legend)
 
@@ -410,7 +411,12 @@ onMounted(async () => {
     <div class="summary-card">
       <div class="summary-top">
         <div>
-          <div class="summary-label">投資組合總值</div>
+          <div class="summary-label" style="display: flex; align-items: center; gap: 0.5rem;">
+            <span>投資組合總值</span>
+            <button class="privacy-icon-btn" @click="togglePrivacy">
+              <component :is="isHidden ? PhEyeSlash : PhEye" size="16" />
+            </button>
+          </div>
           <div class="summary-total">{{ isHidden ? '****' : formatTwd(totalValueTwd) }}</div>
           <div class="summary-pnl" :class="totalPnl >= 0 ? 'gain' : 'loss'">
             {{ totalPnl >= 0 ? '▲' : '▼' }}
@@ -428,19 +434,16 @@ onMounted(async () => {
 
       <!-- Actions row -->
       <div class="action-row">
-        <button class="inv-privacy-btn" @click="togglePrivacy">
-          {{ isHidden ? '👁️ 顯示金額' : '🙈 隱藏金額' }}
-        </button>
         <button class="refresh-btn" @click="refreshPrices" :disabled="isRefreshing">
           <span :class="{ spin: isRefreshing }">⟳</span>
-          {{ isRefreshing ? '更新中...' : '更新報價' }}
-          <span v-if="lastUpdated" class="last-updated">
-            {{ formatUpdatedAt(lastUpdated) }}
-          </span>
+          <span style="white-space: nowrap;">{{ isRefreshing ? '更新中...' : '更新報價' }}</span>
         </button>
         <button class="add-btn" @click="showAddModal = !showAddModal">
-          {{ showAddModal ? '✕' : '+ 新增買入' }}
+          {{ showAddModal ? '✕取消' : '+ 新增買入' }}
         </button>
+      </div>
+      <div class="last-updated-row" v-if="lastUpdated">
+        最後更新：{{ formatUpdatedAt(lastUpdated) }}
       </div>
 
       <!-- Error Message -->
@@ -651,7 +654,7 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
-  padding: 0 1rem 100px 1rem;
+  padding: 0 1rem 140px 1rem;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
 }
@@ -693,7 +696,14 @@ onMounted(async () => {
 }
 .refresh-btn:hover:not(:disabled) { background: rgba(255,255,255,0.12); }
 .refresh-btn:disabled { opacity: 0.6; cursor: not-allowed; }
-.last-updated { font-size: 0.7rem; color: var(--color-text-muted); }
+
+.last-updated-row { 
+  font-size: 0.75rem; 
+  color: var(--color-text-muted); 
+  text-align: right; 
+  margin-top: 0.6rem; 
+  opacity: 0.8;
+}
 
 .spin { display: inline-block; animation: rotate 1s linear infinite; }
 @keyframes rotate { to { transform: rotate(360deg); } }
@@ -707,23 +717,21 @@ onMounted(async () => {
 }
 .add-btn:hover { opacity: 0.85; }
 
-.inv-privacy-btn {
-  background: transparent;
-  border: 1px solid rgba(255,255,255,0.12);
+.privacy-icon-btn {
+  background: none;
+  border: none;
   color: var(--color-text-muted);
-  padding: 0.4rem 0.75rem;
-  border-radius: 10px;
-  font-size: 0.8rem;
   cursor: pointer;
-  transition: all 0.2s;
-  white-space: nowrap;
+  padding: 0 !important;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
 }
-.inv-privacy-btn:hover {
-  background: rgba(255,255,255,0.07);
-  color: var(--color-text);
-  transform: none;
-  box-shadow: none;
-}
+.privacy-icon-btn:hover { color: var(--color-text); }
 
 .refresh-error {
   margin-top: 0.6rem;

@@ -432,11 +432,12 @@ onMounted(() => {
             </div>
             <div class="amount">{{ isHidden ? '****' : formatCurrency(netWorth) }}</div>
            </div>
-          <!-- Allocation Chart - 獨立一行，有足夠空間顯示 legend -->
-          <div class="chart-row">
-            <div class="alloc-chart-wrap">
-              <Doughnut :data="chartData" :options="chartOptions" />
-            </div>
+        </div>
+
+        <!-- Allocation Chart - 獨立一行，有足夠空間顯示 legend -->
+        <div class="chart-row">
+          <div class="alloc-chart-wrap">
+            <Doughnut :data="chartData" :options="chartOptions" />
           </div>
         </div>
 
@@ -514,7 +515,7 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   overflow-y: auto; 
-  padding: 0 1rem 100px 1rem; /* Combined padding including bottom for nav */
+  padding: 0 1rem 140px 1rem; /* Combined padding including bottom for nav */
   position: relative;
   -webkit-overflow-scrolling: touch;
 }
@@ -552,9 +553,14 @@ onMounted(() => {
   border: none;
   color: var(--color-text-muted);
   cursor: pointer;
-  padding: 4px;
+  padding: 0 !important;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
   display: flex;
   align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
 }
 .privacy-btn:hover { color: var(--color-text); }
 
@@ -564,7 +570,7 @@ onMounted(() => {
   margin-bottom: 0.8rem;
 }
 .alloc-chart-wrap {
-  height: 120px;
+  height: 140px;
   width: 100%;
 }
 

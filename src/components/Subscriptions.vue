@@ -226,7 +226,7 @@ const handleAdd = () => {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
-  padding: 0 1rem 100px 1rem;
+  padding: 0 1rem 140px 1rem;
 }
 
 /* ── Summary Card ── */

@@ -341,7 +341,7 @@ const handleAddTransaction = (transaction) => {
 .list-container {
   flex: 1;
   overflow-y: auto;
-  padding: 0 1rem;
+  padding: 0 1rem 140px 1rem;
   -webkit-overflow-scrolling: touch;
 }
 

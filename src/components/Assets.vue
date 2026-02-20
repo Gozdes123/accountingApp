@@ -147,6 +147,11 @@ onMounted(() => {
     <!-- Header: Chart & Focus -->
     <div class="fixed-top">
       <div class="portfolio-card">
+         <div class="card-header">
+           <button class="privacy-icon-btn" @click="togglePrivacy" :title="isHidden ? '顯示金額' : '隱藏金額'">
+             <component :is="isHidden ? PhEyeSlash : PhEye" size="18" />
+           </button>
+         </div>
          <div class="chart-wrapper">
             <Doughnut :data="chartData" :options="chartOptions" />
             <div class="chart-center-text">
@@ -167,10 +172,6 @@ onMounted(() => {
       </div>
 
       <div class="add-asset-wrapper">
-        <button class="privacy-btn" @click="togglePrivacy" :title="isHidden ? '顯示金額' : '隱藏金額'">
-          <component :is="isHidden ? PhEyeSlash : PhEye" size="18" />
-          {{ isHidden ? '顯示金額' : '隱藏金額' }}
-        </button>
         <button class="add-asset-btn" @click="showAddModal = true">
            <PhPlus weight="bold" /> 新增資產
         </button>
@@ -235,10 +236,37 @@ onMounted(() => {
 
 .fixed-top {
   flex-shrink: 0;
-  padding: 1rem 1.5rem 0.5rem 1.5rem;
+  padding: 1rem 1rem 0.5rem 1rem;
   background: var(--color-bg);
   z-index: 10;
 }
+
+.top-actions {
+  display: flex;
+  justify-content: flex-start;
+  margin-bottom: -1rem; /* Pull up to avoid adding extra height */
+  position: relative;
+  z-index: 2;
+}
+
+.privacy-icon-btn {
+  background: transparent;
+  border: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s, color 0.2s;
+  -webkit-tap-highlight-color: transparent;
+  padding: 0 !important;
+  flex: 0 0 auto;
+}
+.privacy-icon-btn:hover { color: var(--color-text); background: rgba(255,255,255,0.05); }
+.privacy-icon-btn:active { background: rgba(255,255,255,0.1); }
 
 /* Portfolio Circular Card */
 .portfolio-card {
@@ -246,6 +274,19 @@ onMounted(() => {
   flex-direction: column;
   align-items: center;
   margin-bottom: 1.5rem;
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.1) 0%, rgba(16, 185, 129, 0.05) 100%);
+  border: 1px solid rgba(59, 130, 246, 0.2);
+  border-radius: 18px;
+  padding: 1rem 1.2rem;
+  position: relative;
+}
+
+.card-header {
+  width: 100%;
+  display: flex;
+  justify-content: flex-start;
+  margin-bottom: -1rem; /* Prevent pushing the chart down */
+  z-index: 2;
 }
 
 .chart-wrapper {
@@ -304,26 +345,7 @@ onMounted(() => {
   gap: 0.6rem;
   margin-bottom: 0.8rem;
 }
-.privacy-btn {
-  background: transparent;
-  color: var(--color-text-muted);
-  border: 1px solid rgba(255,255,255,0.12);
-  border-radius: 20px;
-  padding: 6px 14px;
-  font-size: 0.85rem;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-.privacy-btn:hover {
-  color: var(--color-text);
-  border-color: rgba(255,255,255,0.3);
-  background: rgba(255,255,255,0.05);
-  transform: none;
-  box-shadow: none;
-}
+
 .add-asset-btn {
   background: transparent;
   color: var(--color-primary);
@@ -349,7 +371,7 @@ onMounted(() => {
 .scrollable-content {
   flex: 1;
   overflow-y: auto;
-  padding: 0 1.5rem 100px 1.5rem;
+  padding: 0 1rem 140px 1rem;
   -webkit-overflow-scrolling: touch;
 }
 
