@@ -69,7 +69,6 @@ onMounted(() => {
 <template>
   <div class="favorites-section">
     <div class="header">
-      <h3>⭐ 常用消費 (我的最愛)</h3>
       <button @click="showAddModal = !showAddModal" class="add-btn" :class="{ 'cancel': showAddModal }">
         {{ showAddModal ? '取消' : '+ 新增常用' }}
       </button>
@@ -123,7 +122,7 @@ onMounted(() => {
 
 .header {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-end;
   align-items: center;
   margin-bottom: 1rem;
 }

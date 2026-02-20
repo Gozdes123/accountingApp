@@ -14,7 +14,6 @@ const navItems = [
   { id: 'dashboard', label: '總覽', icon: PhHouse },
   { id: 'transactions', label: '帳務', icon: PhListDashes },
   { id: 'assets', label: '資產', icon: PhBank },
-  { id: 'subscriptions', label: '訂閱', icon: PhCalendarCheck },
   { id: 'investments', label: '投資', icon: PhTrendUp },
 ]
 </script>

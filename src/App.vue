@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, nextTick, watch } from 'vue'
 import { supabase } from './lib/supabaseClient'
 import Subscriptions from './components/Subscriptions.vue'
 import Investments from './components/Investments.vue'
@@ -15,8 +15,15 @@ import Assets from './components/Assets.vue'
 
 const currentTab = ref('dashboard') // dashboard, transactions, assets, subscriptions, investments
 const expenses = ref([])
+const incomes = ref([]) // [New] Incomes state
+const subscriptions = ref([]) // [New] Subscriptions state
+const accounts = ref([]) // [New] Accounts state
 const showEditModal = ref(false)
 const editingExpense = ref({})
+const transactionsRef = ref(null)
+const pendingAction = ref(null) // Store action to perform after tab switch
+
+// Toast System
 
 // Toast System
 const toasts = ref([])
@@ -43,6 +50,47 @@ const fetchExpenses = async () => {
   }
 }
 
+const fetchIncomes = async () => {
+  const { data, error } = await supabase
+    .from('incomes')
+    .select('*')
+    .order('date', { ascending: false })
+    .order('created_at', { ascending: false })
+  
+  if (error) {
+    console.error('Error fetching incomes:', error)
+    // Optional: showToast('error', '無法載入收入資料')
+  } else {
+    incomes.value = data
+  }
+}
+
+const fetchSubscriptions = async () => {
+  const { data, error } = await supabase
+    .from('subscriptions')
+    .select('*')
+    .order('created_at', { ascending: false })
+  
+  if (error) {
+    console.error('Error fetching subscriptions:', error)
+  } else {
+    subscriptions.value = data
+  }
+}
+
+const fetchAccounts = async () => {
+  const { data, error } = await supabase
+    .from('accounts')
+    .select('*')
+    .order('created_at', { ascending: true })
+  
+  if (error) {
+    console.error('Error fetching accounts:', error)
+  } else {
+    accounts.value = data
+  }
+}
+
 const migrateLocalStorage = async () => {
   const saved = localStorage.getItem('expenses')
   if (saved) {
@@ -63,56 +111,89 @@ const migrateLocalStorage = async () => {
 }
 
 const checkSubscriptions = async () => {
-  const { data: subs } = await supabase.from('subscriptions').select('*')
-  if (!subs) return
+  const { data: subs, error: fetchError } = await supabase.from('subscriptions').select('*')
+  if (fetchError || !subs) return
 
   const today = new Date()
   const todayStr = today.toISOString().split('T')[0]
 
   for (const sub of subs) {
-    if (sub.next_payment_date && sub.next_payment_date <= todayStr) {
-      // 1. Create Expense
-      const expense = {
-        title: `[訂閱] ${sub.name}`,
-        amount: sub.cost,
-        category: 'Utilities', // Default category for subs
-        date: sub.next_payment_date // Use the due date as expense date
-      }
-      await supabase.from('expenses').insert([expense])
+    if (!sub.next_payment_date || sub.next_payment_date > todayStr) continue
 
-      // 2. Calculate Next Date
-      const nextDate = new Date(sub.next_payment_date)
-      if (sub.billing_cycle === 'monthly') {
-        nextDate.setMonth(nextDate.getMonth() + 1)
-      } else {
-        nextDate.setFullYear(nextDate.getFullYear() + 1)
-      }
-      const nextDateStr = nextDate.toISOString().split('T')[0]
-
-      // 3. Update Subscription
-      await supabase
-        .from('subscriptions')
-        .update({ next_payment_date: nextDateStr })
-        .eq('id', sub.id)
-
-      // 4. Notify
-      showToast('success', `已自動扣款訂閱：${sub.name} $${sub.cost}`)
+    // Step 1: Insert expense record — if this fails, we stop and do NOT advance the date
+    const expensePayload = {
+      title: `[訂閱] ${sub.name}`,
+      amount: sub.cost,
+      category: 'Subscription',
+      date: sub.next_payment_date
     }
+    if (sub.account_id) expensePayload.account_id = sub.account_id
+
+    const { data: newExpense, error: expenseError } = await supabase
+      .from('expenses')
+      .insert([expensePayload])
+      .select()
+
+    if (expenseError) {
+      console.error(`訂閱 ${sub.name} 記帳失敗:`, expenseError)
+      showToast('error', `訂閱「${sub.name}」自動記帳失敗，請手動新增`)
+      continue // 跳過這筆，不更新下次扣款日
+    }
+
+    // Step 2: Deduct from account balance (only if account was specified)
+    if (sub.account_id) {
+      await updateAccountBalance(sub.account_id, -Math.abs(Number(sub.cost)))
+    }
+
+    // Step 3: Advance next_payment_date (only AFTER expense was confirmed)
+    const nextDate = new Date(sub.next_payment_date)
+    if (sub.billing_cycle === 'monthly') {
+      nextDate.setMonth(nextDate.getMonth() + 1)
+    } else {
+      nextDate.setFullYear(nextDate.getFullYear() + 1)
+    }
+    const nextDateStr = nextDate.toISOString().split('T')[0]
+
+    const { error: updateError } = await supabase
+      .from('subscriptions')
+      .update({ next_payment_date: nextDateStr })
+      .eq('id', sub.id)
+
+    if (updateError) {
+      console.error(`更新 ${sub.name} 下次扣款日失敗:`, updateError)
+    }
+
+    // Step 4: Update local state
+    expenses.value.unshift(newExpense[0])
+    const localSub = subscriptions.value.find(s => s.id === sub.id)
+    if (localSub) localSub.next_payment_date = nextDateStr
+
+    showToast('success', `已自動記帳訂閱：${sub.name} ${formatCurrency(sub.cost)}`)
   }
+}
+
+const formatCurrency = (amount) => {
+  return new Intl.NumberFormat('zh-TW', { style: 'currency', currency: 'TWD', minimumFractionDigits: 0 }).format(amount)
 }
 
 onMounted(async () => {
   await fetchExpenses()
+  await fetchIncomes()
+  await fetchIncomes()
+  await fetchSubscriptions() // [New]
+  await fetchAccounts() // [New]
   await migrateLocalStorage()
   await checkSubscriptions()
 })
 
 const addExpense = async (expense) => {
-  const { id, ...expenseData } = expense
-  
+  const { id, account_id, type, ...expenseData } = expense
+  const payload = { ...expenseData }
+  if (account_id) payload.account_id = account_id // Only send if selected
+
   const { data, error } = await supabase
     .from('expenses')
-    .insert([expenseData])
+    .insert([payload])
     .select()
 
   if (error) {
@@ -121,6 +202,32 @@ const addExpense = async (expense) => {
   } else {
     expenses.value.unshift(data[0])
     showToast('success', `已新增支出：${expenseData.title} $${expenseData.amount}`)
+
+    // Update Account Balance if account_id is provided
+    if (account_id) {
+       updateAccountBalance(account_id, -Math.abs(expenseData.amount))
+    }
+  }
+}
+
+// Helper: Update Account Balance
+const updateAccountBalance = async (accountId, changeAmount) => {
+  const account = accounts.value.find(a => a.id === accountId)
+  if (!account) return
+
+  const newBalance = Number(account.balance) + Number(changeAmount)
+  
+  const { error } = await supabase
+    .from('accounts')
+    .update({ balance: newBalance })
+    .eq('id', accountId)
+
+  if (error) {
+    console.error('Error updating account balance:', error)
+    showToast('error', '更新帳戶餘額失敗')
+  } else {
+    // Update local state
+    account.balance = newBalance
   }
 }
 
@@ -157,6 +264,9 @@ const updateExpense = async (updatedExpense) => {
 }
 
 const deleteExpense = async (id) => {
+  // Find expense before deleting to refund balance
+  const expenseToDelete = expenses.value.find(e => e.id === id)
+  
   const { error } = await supabase
     .from('expenses')
     .delete()
@@ -168,20 +278,183 @@ const deleteExpense = async (id) => {
   } else {
     expenses.value = expenses.value.filter(exp => exp.id !== id)
     showToast('success', '已刪除該筆帳目')
+    
+    // Refund Account Balance
+    if (expenseToDelete && expenseToDelete.account_id) {
+      updateAccountBalance(expenseToDelete.account_id, Math.abs(expenseToDelete.amount)) // Add back
+    }
   }
 }
 
+const addIncome = async (income) => {
+  const { id, account_id, type, ...incomeData } = income
+  const payload = { ...incomeData }
+  if (account_id) payload.account_id = account_id
+
+  const { data, error } = await supabase
+    .from('incomes')
+    .insert([payload])
+    .select()
+
+  if (error) {
+    console.error('Error adding income:', error)
+    showToast('error', '新增收入失敗')
+  } else {
+    incomes.value.unshift(data[0])
+    showToast('success', `已新增收入：${incomeData.title} $${incomeData.amount}`)
+    
+    // Update Account Balance
+    if (account_id) {
+      updateAccountBalance(account_id, Math.abs(incomeData.amount)) // Add
+    }
+  }
+}
+
+const deleteIncome = async (id) => {
+  const incomeToDelete = incomes.value.find(i => i.id === id)
+
+  const { error } = await supabase
+    .from('incomes')
+    .delete()
+    .eq('id', id)
+  
+  if (error) {
+    console.error('Error deleting income:', error)
+    showToast('error', '刪除收入失敗')
+  } else {
+    incomes.value = incomes.value.filter(i => i.id !== id)
+    showToast('success', '已刪除該筆收入')
+    
+    // Deduct Account Balance
+    if (incomeToDelete && incomeToDelete.account_id) {
+      updateAccountBalance(incomeToDelete.account_id, -Math.abs(incomeToDelete.amount)) // Deduct
+    }
+  }
+}
+
+const addSubscription = async (sub) => {
+  const { data, error } = await supabase
+    .from('subscriptions')
+    .insert([sub])
+    .select()
+
+  if (error) {
+    console.error('Error adding subscription:', error)
+    showToast('error', '新增訂閱失敗')
+    return
+  }
+
+  const newSub = data[0]
+  subscriptions.value.unshift(newSub)
+  showToast('success', `已新增訂閱：${newSub.name}`)
+
+  // ── 立即記帳邏輯 ───────────────────────────────
+  // 若扣款日已是今天或過去，立即建立支出、扣帳戶餘額、推進下次扣款日
+  if (!newSub.next_payment_date) return
+
+  const todayStr = new Date().toISOString().split('T')[0]
+  if (newSub.next_payment_date > todayStr) return // 未來日期，不處理
+
+  // Step 1: 建立支出紀錄
+  const expensePayload = {
+    title: `[訂閱] ${newSub.name}`,
+    amount: newSub.cost,
+    category: 'Subscription',
+    date: newSub.next_payment_date
+  }
+  if (newSub.account_id) expensePayload.account_id = newSub.account_id
+
+  const { data: newExpense, error: expenseError } = await supabase
+    .from('expenses')
+    .insert([expensePayload])
+    .select()
+
+  if (expenseError) {
+    console.error(`訂閱 ${newSub.name} 立即記帳失敗:`, expenseError)
+    showToast('error', `訂閱「${newSub.name}」自動記帳失敗，請手動新增支出`)
+    return
+  }
+
+  // Step 2: 扣帳戶餘額（若有指定帳戶）
+  if (newSub.account_id) {
+    await updateAccountBalance(newSub.account_id, -Math.abs(Number(newSub.cost)))
+  }
+
+  // Step 3: 推進下次扣款日
+  const nextDate = new Date(newSub.next_payment_date)
+  if (newSub.billing_cycle === 'monthly') {
+    nextDate.setMonth(nextDate.getMonth() + 1)
+  } else {
+    nextDate.setFullYear(nextDate.getFullYear() + 1)
+  }
+  const nextDateStr = nextDate.toISOString().split('T')[0]
+
+  await supabase
+    .from('subscriptions')
+    .update({ next_payment_date: nextDateStr })
+    .eq('id', newSub.id)
+
+  // Step 4: 更新本地狀態
+  expenses.value.unshift(newExpense[0])
+  const localSub = subscriptions.value.find(s => s.id === newSub.id)
+  if (localSub) localSub.next_payment_date = nextDateStr
+
+  showToast('success', `已自動記帳：${newSub.name} ${formatCurrency(newSub.cost)}，下次扣款 ${nextDateStr}`)
+}
+
+const deleteSubscription = async (id) => {
+  const { error } = await supabase
+    .from('subscriptions')
+    .delete()
+    .eq('id', id)
+  
+  if (error) {
+    console.error('Error deleting subscription:', error)
+    showToast('error', '刪除訂閱失敗')
+  } else {
+    subscriptions.value = subscriptions.value.filter(s => s.id !== id)
+    showToast('success', '已刪除該筆訂閱')
+  }
+}
+
+// Pending actions watcher for delayed modal opening
+watch(transactionsRef, (newRef) => {
+  if (newRef && pendingAction.value) {
+    if (pendingAction.value === 'add-expense') {
+      newRef.openAddModal('expense')
+    } else if (pendingAction.value === 'add-income') {
+      newRef.openAddModal('income')
+    } else if (pendingAction.value === 'open-favorites') {
+      newRef.openFavorites()
+    }
+    pendingAction.value = null
+  }
+})
+
 // FAB Actions
 const handleOpenQuickAdd = () => {
-  currentTab.value = 'transactions'
-  // Trigger expense add mode if needed, for now just go to tab
+  if (currentTab.value === 'transactions' && transactionsRef.value) {
+    transactionsRef.value.openAddModal('expense')
+  } else {
+    pendingAction.value = 'add-expense'
+    currentTab.value = 'transactions'
+  }
 }
 const handleOpenIncomeAdd = () => {
-  currentTab.value = 'transactions'
-  // Trigger income add mode if needed
+  if (currentTab.value === 'transactions' && transactionsRef.value) {
+    transactionsRef.value.openAddModal('income')
+  } else {
+    pendingAction.value = 'add-income'
+    currentTab.value = 'transactions'
+  }
 }
 const handleOpenFavAdd = () => {
-  currentTab.value = 'transactions' 
+  if (currentTab.value === 'transactions' && transactionsRef.value) {
+    transactionsRef.value.openFavorites()
+  } else {
+    pendingAction.value = 'open-favorites'
+    currentTab.value = 'transactions'
+  }
 }
 </script>
 
@@ -205,28 +478,38 @@ const handleOpenFavAdd = () => {
       <Transition name="fade" mode="out-in">
         <!-- Dashboard View -->
         <div v-if="currentTab === 'dashboard'" key="dashboard">
-          <Dashboard :expenses="expenses" @edit-expense="openEditModal" />
+          <Dashboard 
+            :expenses="expenses" 
+            :incomes="incomes" 
+            :accounts="accounts"
+            @edit-expense="openEditModal" 
+          />
         </div>
 
         <!-- Transactions View (Incomes + Expenses) -->
         <div v-else-if="currentTab === 'transactions'" key="transactions">
           <Transactions 
+            ref="transactionsRef"
             :expenses="expenses" 
+            :incomes="incomes"
             @add-expense="addExpense" 
+            @add-income="addIncome"
             @delete-expense="deleteExpense" 
+            @delete-income="deleteIncome"
+            :subscriptions="subscriptions"
+            :accounts="accounts"
+            @add-subscription="addSubscription"
+            @delete-subscription="deleteSubscription"
             @edit-expense="openEditModal" 
           />
         </div>
 
         <!-- Assets View -->
         <div v-else-if="currentTab === 'assets'" key="assets">
-          <Assets />
+          <Assets :accounts="accounts" @refresh="fetchAccounts" />
         </div>
 
-        <!-- Subscriptions View -->
-        <div v-else-if="currentTab === 'subscriptions'" key="subscriptions">
-          <Subscriptions />
-        </div>
+
 
         <!-- Investments View -->
         <div v-else-if="currentTab === 'investments'" key="investments">

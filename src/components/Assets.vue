@@ -1,7 +1,7 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
 import { supabase } from '../lib/supabaseClient'
-import { PhBank, PhCoins, PhCreditCard, PhPlus, PhTrash, PhTrendUp, PhWallet } from '@phosphor-icons/vue'
+import { PhBank, PhCoins, PhCreditCard, PhPlus, PhTrash, PhTrendUp, PhWallet, PhEye, PhEyeSlash } from '@phosphor-icons/vue'
 import { Chart as ChartJS, ArcElement, Tooltip, Legend } from 'chart.js'
 import { Doughnut } from 'vue-chartjs'
 
@@ -9,6 +9,9 @@ ChartJS.register(ArcElement, Tooltip, Legend)
 
 const accounts = ref([])
 const showAddModal = ref(false)
+const isHidden = ref(true)
+const togglePrivacy = () => { isHidden.value = !isHidden.value }
+
 const newAccount = ref({
   name: '',
   balance: 0,
@@ -148,10 +151,11 @@ onMounted(() => {
             <Doughnut :data="chartData" :options="chartOptions" />
             <div class="chart-center-text">
               <span class="label">總資產</span>
-              <span class="value">${{ (totalAssets / 10000).toFixed(1) }}萬</span>
+              <span class="value" v-if="isHidden">****</span>
+              <span class="value" v-else>${{ (totalAssets / 10000).toFixed(1) }}萬</span>
             </div>
          </div>
-         
+
          <!-- Quick Legend -->
          <div class="legend-row">
             <div v-for="group in groupedAccounts.slice(0, 3)" :key="group.type" class="legend-item">
@@ -161,8 +165,12 @@ onMounted(() => {
             </div>
          </div>
       </div>
-      
+
       <div class="add-asset-wrapper">
+        <button class="privacy-btn" @click="togglePrivacy" :title="isHidden ? '顯示金額' : '隱藏金額'">
+          <component :is="isHidden ? PhEyeSlash : PhEye" size="18" />
+          {{ isHidden ? '顯示金額' : '隱藏金額' }}
+        </button>
         <button class="add-asset-btn" @click="showAddModal = true">
            <PhPlus weight="bold" /> 新增資產
         </button>
@@ -175,7 +183,7 @@ onMounted(() => {
           <div v-for="group in groupedAccounts" :key="group.type" class="account-group">
              <div class="group-header">
                 <span class="g-title" :style="{ color: getGroupColor(group.type) }">{{ group.type }}</span>
-                <span class="g-total">${{ group.total.toLocaleString() }}</span>
+                <span class="g-total">{{ isHidden ? '****' : '$' + group.total.toLocaleString() }}</span>
              </div>
              
              <div class="account-cards">
@@ -185,7 +193,7 @@ onMounted(() => {
                    </div>
                    <div class="ac-info">
                       <div class="ac-name">{{ acc.name }}</div>
-                      <div class="ac-bal">${{ Number(acc.balance).toLocaleString() }}</div>
+                      <div class="ac-bal">{{ isHidden ? '****' : '$' + Number(acc.balance).toLocaleString() }}</div>
                    </div>
                    <button class="del-btn-mini" @click="deleteAccount(acc.id)">
                       <PhTrash size="14" />
@@ -292,7 +300,29 @@ onMounted(() => {
 .add-asset-wrapper {
   display: flex;
   justify-content: center;
+  align-items: center;
+  gap: 0.6rem;
   margin-bottom: 0.8rem;
+}
+.privacy-btn {
+  background: transparent;
+  color: var(--color-text-muted);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 20px;
+  padding: 6px 14px;
+  font-size: 0.85rem;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.privacy-btn:hover {
+  color: var(--color-text);
+  border-color: rgba(255,255,255,0.3);
+  background: rgba(255,255,255,0.05);
+  transform: none;
+  box-shadow: none;
 }
 .add-asset-btn {
   background: transparent;
