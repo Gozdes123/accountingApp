@@ -77,10 +77,17 @@ const fetchUsdTwdRate = async () => {
   }
 }
 
-// 2. Stock price via Vite proxy → Yahoo Finance
+// 2. Stock price via Vite proxy (dev) / allorigins proxy (prod) → Yahoo Finance
 const fetchYahooPrice = async (symbol) => {
   try {
-    const url = `/yahoo-finance/v8/finance/chart/${symbol}?interval=1d&range=1d`
+    const isProd = import.meta.env.PROD
+    const yhUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=1d`
+    
+    // Prod uses allorigins.win to bypass CORS for static sites
+    const url = isProd 
+      ? `https://api.allorigins.win/raw?url=${encodeURIComponent(yhUrl)}` 
+      : `/yahoo-finance/v8/finance/chart/${symbol}?interval=1d&range=1d`
+      
     const res = await fetch(url)
     if (!res.ok) return null
     const data = await res.json()
