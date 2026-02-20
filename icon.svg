@@ -1,0 +1,18 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background -->
+  <rect width="512" height="512" rx="114" fill="#0f172a"/>
+  
+  <g transform="translate(141, 150)">
+    <!-- Wallet base -->
+    <path d="M 40 50 L 190 50 A 20 20 0 0 1 210 70 L 210 180 A 20 20 0 0 1 190 200 L 40 200 A 20 20 0 0 1 20 180 L 20 70 A 20 20 0 0 1 40 50 Z" 
+          fill="none" stroke="#3b82f6" stroke-width="24" stroke-linecap="round" stroke-linejoin="round"/>
+          
+    <!-- Wallet flap/overlay -->
+    <path d="M 20 100 L 210 100 M 150 140 A 10 10 0 1 0 150.01 140 Z" 
+          stroke="#3b82f6" stroke-width="24" stroke-linecap="round" stroke-linejoin="round"/>
+          
+    <!-- Money/Coin element coming out -->
+    <circle cx="115" cy="50" r="30" fill="none" stroke="#10b981" stroke-width="20"/>
+    <path d="M 115 35 L 115 65 M 105 50 L 125 50" stroke="#10b981" stroke-width="12" stroke-linecap="round"/>
+  </g>
+</svg>
