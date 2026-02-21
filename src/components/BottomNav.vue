@@ -40,7 +40,7 @@ const navItems = [
   bottom: 0;
   left: 0;
   width: 100%;
-  height: 60px; /* Standard mobile nav height */
+  height: 60px; /* Base hit area */
   background: rgba(15, 23, 42, 0.95); /* Dark background */
   backdrop-filter: blur(12px);
   border-top: 1px solid rgba(255, 255, 255, 0.1);
@@ -48,7 +48,9 @@ const navItems = [
   justify-content: space-around;
   align-items: center;
   z-index: 100;
-  padding-bottom: env(safe-area-inset-bottom);
+  /* Add safe area plus a 20px extra lift */
+  padding-bottom: calc(env(safe-area-inset-bottom) + 20px);
+  padding-top: 4px; /* Slight balance */
 }
 
 .nav-item {
