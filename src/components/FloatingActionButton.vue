@@ -49,7 +49,7 @@ const handleAction = (action) => {
 <style scoped>
 .fab-container {
   position: fixed;
-  bottom: 80px; /* Above bottom nav */
+  bottom: calc(env(safe-area-inset-bottom) + 100px); /* Above bottom nav */
   right: 20px;
   z-index: 200;
   display: flex;

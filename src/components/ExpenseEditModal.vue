@@ -84,9 +84,9 @@ const save = () => {
 .modal-content {
   background: #1e1e2e; /* Fallback */
   background: linear-gradient(135deg, rgba(30, 30, 46, 0.95), rgba(40, 40, 60, 0.95));
-  padding: 2rem;
+  padding: 1.25rem 1rem;
   border-radius: 16px;
-  width: 90%;
+  width: 95%;
   max-width: 400px;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
   border: 1px solid rgba(255, 255, 255, 0.1);

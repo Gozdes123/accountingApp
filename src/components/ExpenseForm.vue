@@ -13,7 +13,7 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['add-expense'])
+const emit = defineEmits(['add-expense', 'update:type'])
 
 const title = ref('')
 const amount = ref('')
@@ -72,7 +72,7 @@ const handleSubmit = () => {
     <div class="type-selector">
       <button 
         type="button"
-        @click="type = 'expense'"
+        @click="type = 'expense'; $emit('update:type', 'expense')"
         class="type-btn"
         :class="{ active: type === 'expense', 'expense-active': type === 'expense' }"
       >
@@ -86,7 +86,7 @@ const handleSubmit = () => {
 
       <button 
         type="button"
-        @click="type = 'income'"
+        @click="type = 'income'; $emit('update:type', 'income')"
         class="type-btn"
         :class="{ active: type === 'income', 'income-active': type === 'income' }"
       >
@@ -109,8 +109,8 @@ const handleSubmit = () => {
       />
     </div>
     
-    <div style="display: flex; gap: 1rem;">
-      <div style="flex: 1;">
+    <div style="display: flex; gap: 0.75rem; flex-wrap: wrap;">
+      <div style="flex: 1; min-width: 120px;">
         <label style="display: block; margin-bottom: 0.5rem; color: var(--color-text-muted);">金額</label>
         <input 
           type="number" 
@@ -121,7 +121,7 @@ const handleSubmit = () => {
           required 
         />
       </div>
-      <div style="flex: 1;">
+      <div style="flex: 1; min-width: 120px;">
         <label style="display: block; margin-bottom: 0.5rem; color: var(--color-text-muted);">分類</label>
         <select v-model="category" :disabled="false">
           <template v-if="type === 'expense'">
@@ -164,6 +164,7 @@ const handleSubmit = () => {
       <input 
         type="date" 
         v-model="date" 
+        style="width: 100%; min-width: 0;"
         required 
       />
     </div>

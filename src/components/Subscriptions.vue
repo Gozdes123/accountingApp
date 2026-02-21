@@ -298,12 +298,13 @@ const handleAdd = () => {
   background: rgba(255,255,255,0.04);
   border: 1px solid rgba(255,255,255,0.1);
   border-radius: 16px;
-  padding: 1.2rem;
+  padding: 1.25rem 1rem;
 }
 .form-title { font-size: 0.95rem; font-weight: 600; margin-bottom: 1rem; color: var(--color-text); }
-.form-group { margin-bottom: 0.75rem; }
+.form-group { flex: 1; min-width: 120px; margin-bottom: 0.75rem; }
 .form-group label { display: block; font-size: 0.8rem; color: var(--color-text-muted); margin-bottom: 0.3rem; }
-.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+.form-group input, .form-group select { width: 100%; min-width: 0; }
+.form-row { display: flex; flex-wrap: wrap; gap: 0.75rem; }
 .save-btn {
   width: 100%; padding: 0.7rem;
   background: #7c3aed; color: white;

@@ -167,6 +167,7 @@ onMounted(() => {
   gap: 1rem;
   overflow-x: auto;
   padding-bottom: 0.5rem;
+  padding-top: 0.5rem;
 }
 
 .fav-card {

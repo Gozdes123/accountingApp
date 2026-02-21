@@ -152,6 +152,7 @@ const handleAddTransaction = (transaction) => {
               :initial-type="initialFormType" 
               :accounts="accounts"
               @add-expense="handleAddTransaction" 
+              @update:type="initialFormType = $event"
             />
           </div>
         </div>
@@ -362,9 +363,9 @@ const handleAddTransaction = (transaction) => {
 
 .modal-content {
   background: #1e293b;
-  padding: 1.5rem;
+  padding: 1.25rem 1rem; /* reduced from 1.5rem */
   border-radius: 16px;
-  width: 90%;
+  width: 90%; /* wider than 90% */
   max-width: 400px;
   display: flex;
   flex-direction: column;
