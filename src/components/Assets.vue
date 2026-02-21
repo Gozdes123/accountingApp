@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onActivated, computed } from 'vue'
 import { supabase } from '../lib/supabaseClient'
 import { PhBank, PhCoins, PhCreditCard, PhPlus, PhTrash, PhTrendUp, PhWallet, PhEye, PhEyeSlash } from '@phosphor-icons/vue'
 import { Chart as ChartJS, ArcElement, Tooltip, Legend } from 'chart.js'
@@ -11,6 +11,8 @@ const accounts = ref([])
 const showAddModal = ref(false)
 const isHidden = ref(true)
 const togglePrivacy = () => { isHidden.value = !isHidden.value }
+
+const isInitialDataLoaded = ref(false)
 
 const newAccount = ref({
   name: '',
@@ -85,6 +87,7 @@ const fetchAccounts = async () => {
   
   if (error) console.error('Error fetching accounts:', error)
   else accounts.value = data
+  isInitialDataLoaded.value = true
 }
 
 const addAccount = async () => {
@@ -140,10 +143,14 @@ const getGroupColor = (type) => {
 onMounted(() => {
   fetchAccounts()
 })
+
+onActivated(() => {
+  fetchAccounts()
+})
 </script>
 
 <template>
-  <div class="assets-container">
+  <div class="assets-container" v-if="isInitialDataLoaded">
     <!-- Header: Chart & Focus -->
     <div class="fixed-top">
       <div class="portfolio-card">
@@ -220,6 +227,10 @@ onMounted(() => {
         </div>
       </div>
     </div>
+  </div>
+  <div class="assets-container" v-else style="display: flex; align-items: center; justify-content: center; color: var(--color-text-muted);">
+    <div class="loading-spinner"></div>
+    <span style="margin-left: 10px;">資料同步中...</span>
   </div>
 </template>
 
@@ -488,4 +499,18 @@ button {
   cursor: pointer;
 }
 button.primary { background: var(--color-primary); color: white; }
+
+.loading-spinner {
+  width: 24px;
+  height: 24px;
+  border: 3px solid rgba(255, 255, 255, 0.1);
+  border-top: 3px solid var(--color-primary);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
 </style>

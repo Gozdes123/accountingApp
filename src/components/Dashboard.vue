@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, computed, watch } from 'vue'
+import { ref, onMounted, onActivated, computed, watch } from 'vue'
 import { supabase } from '../lib/supabaseClient'
 import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement, Title } from 'chart.js'
 import { Doughnut, Line } from 'vue-chartjs'
@@ -44,6 +44,8 @@ const togglePrivacy = () => {
 
 // Timeframe Analysis
 
+
+const isInitialDataLoaded = ref(false)
 
 const fetchFinancialData = async () => {
   // 1. 抓 USD/TWD 匯率
@@ -91,6 +93,8 @@ const fetchFinancialData = async () => {
   if (accounts) {
     totalAssets.value = accounts.reduce((sum, item) => sum + Number(item.balance), 0)
   }
+
+  isInitialDataLoaded.value = true
 }
 
 // 每月投入金額 map（key: 'YYYY-M'）
@@ -415,10 +419,14 @@ const trendChartOptions = {
 onMounted(() => {
   fetchFinancialData()
 })
+
+onActivated(() => {
+  fetchFinancialData()
+})
 </script>
 
 <template>
-  <div class="dashboard-container">
+  <div class="dashboard-container" v-if="isInitialDataLoaded">
     <!-- Header Section -->
     <div class="dashboard-header">
       <div class="summary-card card-gradient">
@@ -504,6 +512,10 @@ onMounted(() => {
         </div>
       </div>
     </div>
+  </div>
+  <div class="dashboard-container" v-else style="display: flex; align-items: center; justify-content: center; color: var(--color-text-muted);">
+    <div class="loading-spinner"></div>
+    <span style="margin-left: 10px;">資料同步中...</span>
   </div>
 </template>
 
@@ -669,11 +681,23 @@ onMounted(() => {
   align-items: center;
 }
 
-/* Consumption Chart */
 .large-chart {
   position: relative;
   height: 200px;
   width: 100%;
 }
 
+.loading-spinner {
+  width: 24px;
+  height: 24px;
+  border: 3px solid rgba(255, 255, 255, 0.1);
+  border-top: 3px solid var(--color-primary);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
 </style>

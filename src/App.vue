@@ -176,12 +176,16 @@ const formatCurrency = (amount) => {
   return new Intl.NumberFormat('zh-TW', { style: 'currency', currency: 'TWD', minimumFractionDigits: 0 }).format(amount)
 }
 
+const isDataLoaded = ref(false)
+
 onMounted(async () => {
-  await fetchExpenses()
-  await fetchIncomes()
-  await fetchIncomes()
-  await fetchSubscriptions() // [New]
-  await fetchAccounts() // [New]
+  await Promise.all([
+    fetchExpenses(),
+    fetchIncomes(),
+    fetchSubscriptions(),
+    fetchAccounts()
+  ])
+  isDataLoaded.value = true
   await migrateLocalStorage()
   await checkSubscriptions()
 })
@@ -474,21 +478,17 @@ const handleOpenFavAdd = () => {
     </header>
 
     <!-- Main Content Area with Transition -->
-    <div class="content-area">
+    <div class="content-area" v-if="isDataLoaded">
       <Transition name="fade" mode="out-in">
-        <!-- Dashboard View -->
-        <div v-if="currentTab === 'dashboard'" key="dashboard">
-          <Dashboard 
+        <KeepAlive>
+          <Dashboard v-if="currentTab === 'dashboard'" key="dashboard"
             :expenses="expenses" 
             :incomes="incomes" 
             :accounts="accounts"
             @edit-expense="openEditModal" 
           />
-        </div>
 
-        <!-- Transactions View (Incomes + Expenses) -->
-        <div v-else-if="currentTab === 'transactions'" key="transactions">
-          <Transactions 
+          <Transactions v-else-if="currentTab === 'transactions'" key="transactions"
             ref="transactionsRef"
             :expenses="expenses" 
             :incomes="incomes"
@@ -502,20 +502,17 @@ const handleOpenFavAdd = () => {
             @delete-subscription="deleteSubscription"
             @edit-expense="openEditModal" 
           />
-        </div>
 
-        <!-- Assets View -->
-        <div v-else-if="currentTab === 'assets'" key="assets">
-          <Assets :accounts="accounts" @refresh="fetchAccounts" />
-        </div>
+          <Assets v-else-if="currentTab === 'assets'" key="assets"
+            :accounts="accounts" @refresh="fetchAccounts" 
+          />
 
-
-
-        <!-- Investments View -->
-        <div v-else-if="currentTab === 'investments'" key="investments">
-          <Investments />
-        </div>
+          <Investments v-else-if="currentTab === 'investments'" key="investments" />
+        </KeepAlive>
       </Transition>
+    </div>
+    <div class="content-area" v-else style="display: flex; align-items: center; justify-content: center; color: var(--color-text-muted);">
+      載入中...
     </div>
 
     <!-- Global Components -->

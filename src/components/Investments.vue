@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onActivated, computed } from 'vue'
 import { supabase } from '../lib/supabaseClient'
 import { Chart as ChartJS, ArcElement, Tooltip, Legend } from 'chart.js'
 import { Doughnut } from 'vue-chartjs'
@@ -16,6 +16,7 @@ const refreshError = ref('')
 const saveError = ref('')
 const lastUpdated = ref(null)
 const usdTwdRate = ref(32)
+const isInitialDataLoaded = ref(false)
 
 // 隱藏金額
 const isHidden = ref(true)
@@ -394,7 +395,7 @@ const deleteLot = async (id) => {
   if (!error) investments.value = investments.value.filter(i => i.id !== id)
 }
 
-onMounted(async () => {
+const initInvestments = async () => {
   await fetchInvestments()
   const oldest = investments.value.reduce((earliest, inv) => {
     if (!inv.price_updated_at) return null
@@ -408,11 +409,20 @@ onMounted(async () => {
   } else {
     usdTwdRate.value = await fetchUsdTwdRate()
   }
+  isInitialDataLoaded.value = true
+}
+
+onMounted(() => {
+  initInvestments()
+})
+
+onActivated(() => {
+  initInvestments()
 })
 </script>
 
 <template>
-  <div class="inv-container">
+  <div class="inv-container" v-if="isInitialDataLoaded">
 
     <!-- ── Header Summary Card ────────────────────────────────── -->
     <div class="summary-card">
@@ -653,6 +663,10 @@ onMounted(async () => {
       </template>
     </div>
 
+  </div>
+  <div class="inv-container" v-else style="display: flex; align-items: center; justify-content: center; color: var(--color-text-muted);">
+    <div class="loading-spinner"></div>
+    <span style="margin-left: 10px;">資料同步中...</span>
   </div>
 </template>
 
@@ -1015,5 +1029,19 @@ onMounted(async () => {
   opacity: 0;
   transform: translateY(-6px);
   max-height: 0;
+}
+
+.loading-spinner {
+  width: 24px;
+  height: 24px;
+  border: 3px solid rgba(255, 255, 255, 0.1);
+  border-top: 3px solid var(--color-primary);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
 }
 </style>
