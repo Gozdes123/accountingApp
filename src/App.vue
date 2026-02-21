@@ -539,6 +539,7 @@ const handleOpenFavAdd = () => {
   margin: 0;
   padding: 0;
   overflow: hidden; /* Prevent global scroll */
+  overscroll-behavior-y: none;
   height: 100vh;
   width: 100vw;
   background-color: var(--color-bg);

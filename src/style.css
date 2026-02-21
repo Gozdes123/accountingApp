@@ -28,6 +28,8 @@ body {
   place-items: center;
   min-width: 320px;
   min-height: 100vh;
+  /* Prevent full-page bounce scroll on iOS devices */
+  overscroll-behavior-y: none;
   background-color: var(--color-bg);
   background-image:
     radial-gradient(at 0% 0%, hsla(253, 16%, 7%, 1) 0, transparent 50%),
