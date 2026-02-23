@@ -13,14 +13,14 @@ const fetchFavorites = async () => {
     .from('favorites')
     .select('*')
     .order('created_at', { ascending: false })
-  
+
   if (error) console.error('Error fetching favorites:', error)
   else favorites.value = data
 }
 
 const addFavorite = async () => {
   if (!newFav.value.title || !newFav.value.amount) return
-  
+
   const { data, error } = await supabase
     .from('favorites')
     .insert([{
@@ -55,7 +55,7 @@ const deleteFavorite = async (id) => {
     .from('favorites')
     .delete()
     .eq('id', id)
-  
+
   if (!error) {
     favorites.value = favorites.value.filter(f => f.id !== id)
   }
@@ -137,6 +137,7 @@ onMounted(() => {
   padding: 0.3rem 0.8rem;
   font-size: 0.9rem;
 }
+
 .add-btn.cancel {
   background-color: transparent;
   border: 1px solid var(--color-text-muted);
@@ -154,7 +155,9 @@ onMounted(() => {
   gap: 0.5rem;
   flex-wrap: wrap;
 }
-.form-row input, .form-row select {
+
+.form-row input,
+.form-row select {
   flex: 1;
   min-width: 100px;
   margin-bottom: 0;
@@ -188,7 +191,8 @@ onMounted(() => {
 
 .fav-card:hover {
   transform: translateY(-2px);
-  background-color: rgba(59, 130, 246, 0.2); /* primary color tint */
+  background-color: rgba(59, 130, 246, 0.2);
+  /* primary color tint */
   border-color: var(--color-primary);
 }
 
@@ -218,15 +222,21 @@ onMounted(() => {
 
 .delete-btn {
   position: absolute;
-  top: 4px;
-  right: 4px;
+  top: 0;
+  right: 0;
   background: transparent;
   color: var(--color-text-muted);
   border: none;
   font-size: 1.2rem;
   line-height: 1;
-  padding: 0 4px;
+  padding: 8px;
+  min-width: 36px;
+  min-height: 36px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
 }
+
 .delete-btn:hover {
   color: var(--color-danger);
   transform: none;
@@ -240,7 +250,7 @@ onMounted(() => {
   padding: 1rem;
   width: 100%;
   text-align: center;
-  background: rgba(255,255,255,0.03);
+  background: rgba(255, 255, 255, 0.03);
   border-radius: 8px;
 }
 </style>

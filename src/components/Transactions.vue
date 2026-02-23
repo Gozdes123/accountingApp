@@ -35,11 +35,11 @@ const initialFormType = ref('expense')
 const currentView = ref('transactions') // 'transactions' or 'subscriptions'
 
 // Subscription Form
-const newSub = ref({ 
-  name: '', 
-  cost: '', 
+const newSub = ref({
+  name: '',
+  cost: '',
   billing_cycle: 'monthly',
-  next_payment_date: '' 
+  next_payment_date: ''
 })
 
 const handleAddSubscription = () => {
@@ -97,17 +97,11 @@ const handleAddTransaction = (transaction) => {
     <!-- Header -->
     <!-- Header -->
     <div class="view-toggle">
-      <button 
-        @click="currentView = 'transactions'" 
-        :class="{ active: currentView === 'transactions' }"
-      >
+      <button @click="currentView = 'transactions'" :class="{ active: currentView === 'transactions' }">
         <PhArrowsLeftRight size="18" weight="bold" />
         帳務紀錄
       </button>
-      <button 
-        @click="currentView = 'subscriptions'" 
-        :class="{ active: currentView === 'subscriptions' }"
-      >
+      <button @click="currentView = 'subscriptions'" :class="{ active: currentView === 'subscriptions' }">
         <PhCalendarCheck size="18" weight="bold" />
         訂閱服務
       </button>
@@ -115,7 +109,7 @@ const handleAddTransaction = (transaction) => {
 
     <!-- Transactions View Actions -->
     <div class="header-actions" v-if="currentView === 'transactions'">
-       <button class="add-btn" @click="openAddModal('expense')">
+      <button class="add-btn" @click="openAddModal('expense')">
         <PhPlus size="18" weight="bold" />
         <span>新增帳目</span>
       </button>
@@ -130,53 +124,45 @@ const handleAddTransaction = (transaction) => {
 
     <!-- Unified Content -->
     <div class="tab-content" v-if="currentView === 'transactions'">
-        <!-- List only, maximize space -->
-        <div class="list-container">
-          <ExpenseList 
-            :expenses="expenses" 
-            :incomes="incomes"
-            @delete-expense="emit('delete-expense', $event)" 
-            @delete-income="emit('delete-income', $event)"
-            @edit-expense="emit('edit-expense', $event)" 
-          />
-        </div>
+      <!-- List only, maximize space -->
+      <div class="list-container">
+        <ExpenseList :expenses="expenses" :incomes="incomes" @delete-expense="emit('delete-expense', $event)"
+          @delete-income="emit('delete-income', $event)" @edit-expense="emit('edit-expense', $event)" />
+      </div>
 
-        <!-- Add Transaction Modal -->
-        <div v-if="showAddModal" class="modal-overlay" @click.self="showAddModal = false">
-          <div class="modal-content">
-            <div class="modal-header">
-              <h3>{{ initialFormType === 'income' ? '新增收入' : '新增支出' }}</h3>
-              <button class="close-btn" @click="showAddModal = false"><PhX size="20" /></button>
-            </div>
-            <ExpenseForm 
-              :initial-type="initialFormType" 
-              :accounts="accounts"
-              @add-expense="handleAddTransaction" 
-              @update:type="initialFormType = $event"
-            />
+      <!-- Add Transaction Modal -->
+      <div v-if="showAddModal" class="modal-overlay" @click.self="showAddModal = false">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h3>{{ initialFormType === 'income' ? '新增收入' : '新增支出' }}</h3>
+            <button class="close-btn" @click="showAddModal = false">
+              <PhX size="20" />
+            </button>
           </div>
+          <ExpenseForm :initial-type="initialFormType" :accounts="accounts" @add-expense="handleAddTransaction"
+            @update:type="initialFormType = $event" />
         </div>
+      </div>
 
-        <!-- Favorites Modal -->
-        <div v-if="showFavModal" class="modal-overlay" @click.self="showFavModal = false">
-          <div class="modal-content" style="max-width: 500px;">
-            <div class="modal-header">
-              <h3>⭐ 常用消費</h3>
-              <button class="close-btn" @click="showFavModal = false"><PhX size="20" /></button>
-            </div>
-            <QuickAdd @add-expense="handleAddTransaction" />
+      <!-- Favorites Modal -->
+      <div v-if="showFavModal" class="modal-overlay" @click.self="showFavModal = false">
+        <div class="modal-content" style="max-width: 500px;">
+          <div class="modal-header">
+            <h3>⭐ 常用消費</h3>
+            <button class="close-btn" @click="showFavModal = false">
+              <PhX size="20" />
+            </button>
           </div>
+          <QuickAdd @add-expense="handleAddTransaction" />
         </div>
+      </div>
     </div>
 
     <!-- Subscriptions Content - delegated to Subscriptions component -->
     <div class="tab-content" v-if="currentView === 'subscriptions'">
-      <SubscriptionsPanel
-        :subscriptions="subscriptions"
-        :accounts="accounts"
+      <SubscriptionsPanel :subscriptions="subscriptions" :accounts="accounts"
         @add-subscription="emit('add-subscription', $event)"
-        @delete-subscription="emit('delete-subscription', $event)"
-      />
+        @delete-subscription="emit('delete-subscription', $event)" />
     </div>
   </div>
 </template>
@@ -200,7 +186,7 @@ const handleAddTransaction = (transaction) => {
 .view-toggle {
   display: flex;
   margin: 0 1rem 1rem 1rem;
-  background: rgba(255,255,255,0.05);
+  background: rgba(255, 255, 255, 0.05);
   padding: 4px;
   border-radius: 12px;
 }
@@ -223,9 +209,9 @@ const handleAddTransaction = (transaction) => {
 }
 
 .view-toggle button.active {
-  background: rgba(255,255,255,0.1);
+  background: rgba(255, 255, 255, 0.1);
   color: white;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
 .sub-summary {
@@ -248,10 +234,10 @@ const handleAddTransaction = (transaction) => {
   justify-content: space-between;
   align-items: center;
   padding: 1rem;
-  background: rgba(255,255,255,0.02);
+  background: rgba(255, 255, 255, 0.02);
   margin-bottom: 0.5rem;
   border-radius: 12px;
-  border: 1px solid rgba(255,255,255,0.05);
+  border: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 .sub-name {
@@ -275,10 +261,11 @@ const handleAddTransaction = (transaction) => {
 
 .icon-btn {
   background: transparent;
-  border: 1px solid rgba(255,255,255,0.1);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   color: var(--color-text-muted);
-  width: 28px;
-  height: 28px;
+  width: 40px;
+  height: 40px;
+  font-size: 1.1rem;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -294,17 +281,20 @@ const handleAddTransaction = (transaction) => {
 .form-group {
   margin-bottom: 1rem;
 }
+
 .form-group label {
   display: block;
   margin-bottom: 0.4rem;
   color: var(--color-text-muted);
   font-size: 0.9rem;
 }
-.form-group input, .form-group select {
+
+.form-group input,
+.form-group select {
   width: 100%;
   padding: 0.6rem;
-  background: rgba(255,255,255,0.05);
-  border: 1px solid rgba(255,255,255,0.1);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   color: white;
   border-radius: 8px;
 }
@@ -353,7 +343,7 @@ const handleAddTransaction = (transaction) => {
   left: 0;
   width: 100%;
   height: 100%;
-  background: rgba(0,0,0,0.8);
+  background: rgba(0, 0, 0, 0.8);
   backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
@@ -363,14 +353,16 @@ const handleAddTransaction = (transaction) => {
 
 .modal-content {
   background: #1e293b;
-  padding: 1.25rem 1rem; /* reduced from 1.5rem */
+  padding: 1.25rem 1rem;
+  /* reduced from 1.5rem */
   border-radius: 16px;
-  width: 90%; /* wider than 90% */
+  width: 90%;
+  /* wider than 90% */
   max-width: 400px;
   display: flex;
   flex-direction: column;
   gap: 1rem;
-  border: 1px solid rgba(255,255,255,0.1);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
 }
 
@@ -382,8 +374,8 @@ const handleAddTransaction = (transaction) => {
 }
 
 .modal-header h3 {
- margin: 0;
- font-size: 1.2rem;
+  margin: 0;
+  font-size: 1.2rem;
 }
 
 .close-btn {

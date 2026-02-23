@@ -48,23 +48,23 @@ const calendarDays = computed(() => {
   const month = currentMonth.value.getMonth()
   const daysInMonth = getDaysInMonth(year, month)
   const firstDayIndex = getFirstDayOfMonth(year, month)
-  
+
   const days = []
-  
+
   // Padding for previous month
   for (let i = 0; i < firstDayIndex; i++) {
     days.push({ class: 'empty' })
   }
-  
+
   // Actual days
   const todayStr = new Date().toISOString().split('T')[0]
-  
+
   for (let d = 1; d <= daysInMonth; d++) {
     const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`
     const isToday = dateStr === todayStr
     const isSelected = dateStr === selectedDate.value
     const { hasExp, hasInc } = hasTransactionsOnDate(dateStr)
-    
+
     days.push({
       dateStr,
       dayNumber: d,
@@ -82,19 +82,19 @@ const calendarDays = computed(() => {
 const collapsedCalendarDays = computed(() => {
   const fullCal = calendarDays.value
   const targetDateStr = selectedDate.value || new Date().toISOString().split('T')[0]
-  
+
   // Find index of the target day
   let targetIndex = fullCal.findIndex(d => d.dateStr === targetDateStr)
-  
+
   // If target day not in current displayed month, show first week
   if (targetIndex === -1) {
-    if(!selectedDate.value) {
-        // trying to show today
-        return fullCal.slice(0, 7) // fallback to first week if today not in month
+    if (!selectedDate.value) {
+      // trying to show today
+      return fullCal.slice(0, 7) // fallback to first week if today not in month
     }
     return fullCal.slice(0, 7)
   }
-  
+
   // Calculate start of the week (assuming Sunday start)
   const rowStart = Math.floor(targetIndex / 7) * 7
   return fullCal.slice(rowStart, rowStart + 7)
@@ -197,15 +197,19 @@ const getCategoryLabel = (cat) => categoryMap[cat] || cat
   <div class="calendar-widget" v-if="filterMode === 'calendar'">
     <div class="calendar-header">
       <div class="month-selector">
-        <button @click="prevMonth" class="nav-btn"><PhCaretLeft size="18" weight="bold" /></button>
+        <button @click="prevMonth" class="nav-btn">
+          <PhCaretLeft size="18" weight="bold" />
+        </button>
         <span class="current-month" @click="toggleCalendar">
           {{ currentMonth.getFullYear() }} 年 {{ currentMonth.getMonth() + 1 }} 月
-          <PhCalendarBlank size="16" weight="bold" style="margin-left: 4px; opacity: 0.7;"/>
+          <PhCalendarBlank size="16" weight="bold" style="margin-left: 4px; opacity: 0.7;" />
         </span>
-        <button @click="nextMonth" class="nav-btn"><PhCaretRight size="18" weight="bold" /></button>
+        <button @click="nextMonth" class="nav-btn">
+          <PhCaretRight size="18" weight="bold" />
+        </button>
       </div>
       <button @click="toggleCalendar" class="expand-btn">
-        <component :is="isCalendarExpanded ? PhCaretUp : PhCaretDown" size="18" weight="bold"/>
+        <component :is="isCalendarExpanded ? PhCaretUp : PhCaretDown" size="18" weight="bold" />
       </button>
     </div>
 
@@ -214,17 +218,13 @@ const getCategoryLabel = (cat) => categoryMap[cat] || cat
       <div class="weekdays">
         <div v-for="day in daysOfWeek" :key="day" class="weekday">{{ day }}</div>
       </div>
-      
+
       <!-- Grid -->
       <div class="days-grid">
         <template v-if="isCalendarExpanded">
-          <div 
-            v-for="(day, index) in calendarDays" 
-            :key="'full-'+index"
-            class="day-cell"
+          <div v-for="(day, index) in calendarDays" :key="'full-' + index" class="day-cell"
             :class="[day.class, { 'today': day.isToday, 'selected': day.isSelected }]"
-            @click="day.dateStr && selectDate(day.dateStr)"
-          >
+            @click="day.dateStr && selectDate(day.dateStr)">
             <span v-if="day.dayNumber">{{ day.dayNumber }}</span>
             <div class="dots-container" v-if="day.dayNumber">
               <span v-if="day.hasInc" class="dot income-dot"></span>
@@ -233,15 +233,11 @@ const getCategoryLabel = (cat) => categoryMap[cat] || cat
           </div>
         </template>
         <template v-else>
-           <div 
-            v-for="(day, index) in collapsedCalendarDays" 
-            :key="'col-'+index"
-            class="day-cell"
+          <div v-for="(day, index) in collapsedCalendarDays" :key="'col-' + index" class="day-cell"
             :class="[day.class, { 'today': day.isToday, 'selected': day.isSelected }]"
-            @click="day.dateStr && selectDate(day.dateStr)"
-          >
+            @click="day.dateStr && selectDate(day.dateStr)">
             <span v-if="day.dayNumber">{{ day.dayNumber }}</span>
-             <div class="dots-container" v-if="day.dayNumber">
+            <div class="dots-container" v-if="day.dayNumber">
               <span v-if="day.hasInc" class="dot income-dot"></span>
               <span v-if="day.hasExp" class="dot expense-dot"></span>
             </div>
@@ -249,7 +245,7 @@ const getCategoryLabel = (cat) => categoryMap[cat] || cat
         </template>
       </div>
     </div>
-    
+
 
   </div>
 
@@ -265,14 +261,15 @@ const getCategoryLabel = (cat) => categoryMap[cat] || cat
         <label class="date-label">結束日</label>
         <input type="date" v-model="endDate" class="date-input" />
       </div>
-      <button v-if="startDate || endDate" @click="startDate = ''; endDate = ''" class="clear-btn-small" title="清除">✕</button>
+      <button v-if="startDate || endDate" @click="startDate = ''; endDate = ''" class="clear-btn-small"
+        title="清除">✕</button>
     </div>
   </div>
 
   <div v-if="filteredIncomes.length === 0 && filteredExpenses.length === 0" class="text-center empty-state">
     {{ filterMode === 'calendar' && selectedDate ? '這一天沒有帳目紀錄' : '目前沒有帳目紀錄，開始記帳吧！' }}
   </div>
-  
+
   <div v-else class="list-wrapper">
     <!-- Net Balance Summary -->
     <div class="balance-summary" v-if="(filterMode === 'calendar' && selectedDate) || filterMode === 'range'">
@@ -290,7 +287,7 @@ const getCategoryLabel = (cat) => categoryMap[cat] || cat
       </h3>
       <ul class="list">
         <li v-for="item in filteredIncomes" :key="item.id" class="expense-item">
-           <div style="flex: 1;">
+          <div style="flex: 1;">
             <div style="font-weight: 500; font-size: 1rem;">{{ item.title }}</div>
             <div style="font-size: 0.8rem; color: var(--color-text-muted); margin-top: 0.2rem;">
               {{ formatDate(item.date) }}
@@ -300,13 +297,13 @@ const getCategoryLabel = (cat) => categoryMap[cat] || cat
             <div style="font-weight: bold; font-size: 1.1rem; color: var(--color-success);">
               +{{ formatCurrency(item.amount) }}
             </div>
-             <button @click="emit('delete-income', item.id)" class="icon-btn delete">✕</button>
+            <button @click="emit('delete-income', item.id)" class="icon-btn delete">✕</button>
           </div>
         </li>
       </ul>
     </div>
 
-     <!-- Expense Section -->
+    <!-- Expense Section -->
     <div v-if="filteredExpenses.length > 0" class="section">
       <h3 class="section-title expense-title">
         <span>💸 支出</span>
@@ -317,7 +314,8 @@ const getCategoryLabel = (cat) => categoryMap[cat] || cat
           <div style="flex: 1;">
             <div style="font-weight: 500; font-size: 1rem;">{{ item.title }}</div>
             <div style="font-size: 0.8rem; color: var(--color-text-muted); margin-top: 0.2rem;">
-              <span v-if="item.category" style="display: inline-block; background-color: rgba(255,255,255,0.1); padding: 0.1rem 0.4rem; border-radius: 4px; margin-right: 0.5rem;">
+              <span v-if="item.category"
+                style="display: inline-block; background-color: rgba(255,255,255,0.1); padding: 0.1rem 0.4rem; border-radius: 4px; margin-right: 0.5rem;">
                 {{ getCategoryLabel(item.category) }}
               </span>
               {{ formatDate(item.date) }}
@@ -327,8 +325,8 @@ const getCategoryLabel = (cat) => categoryMap[cat] || cat
             <div style="font-weight: bold; font-size: 1.1rem; color: white;">
               {{ formatCurrency(item.amount) }}
             </div>
-             <button @click="emit('edit-expense', item)" class="icon-btn edit">✎</button>
-             <button @click="emit('delete-expense', item.id)" class="icon-btn delete">✕</button>
+            <button @click="emit('edit-expense', item)" class="icon-btn edit">✎</button>
+            <button @click="emit('delete-expense', item.id)" class="icon-btn delete">✕</button>
           </div>
         </li>
       </ul>
@@ -344,7 +342,7 @@ const getCategoryLabel = (cat) => categoryMap[cat] || cat
   margin-bottom: 1rem;
   overflow: hidden;
   box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-  border: 1px solid rgba(255,255,255,0.05);
+  border: 1px solid rgba(255, 255, 255, 0.05);
   flex-shrink: 0;
 }
 
@@ -353,8 +351,8 @@ const getCategoryLabel = (cat) => categoryMap[cat] || cat
   justify-content: space-between;
   align-items: center;
   padding: 0.5rem 1rem;
-  background: rgba(255,255,255,0.02);
-  border-bottom: 1px solid rgba(255,255,255,0.05);
+  background: rgba(255, 255, 255, 0.02);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 .month-selector {
@@ -372,7 +370,8 @@ const getCategoryLabel = (cat) => categoryMap[cat] || cat
   align-items: center;
 }
 
-.nav-btn, .expand-btn {
+.nav-btn,
+.expand-btn {
   background: transparent;
   border: none;
   color: var(--color-text-muted);
@@ -385,8 +384,9 @@ const getCategoryLabel = (cat) => categoryMap[cat] || cat
   transition: background 0.2s;
 }
 
-.nav-btn:hover, .expand-btn:hover {
-  background: rgba(255,255,255,0.1);
+.nav-btn:hover,
+.expand-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
   color: white;
 }
 
@@ -431,7 +431,7 @@ const getCategoryLabel = (cat) => categoryMap[cat] || cat
 }
 
 .day-cell.active-day:hover {
-  background: rgba(255,255,255,0.05);
+  background: rgba(255, 255, 255, 0.05);
 }
 
 .day-cell.today {
@@ -459,10 +459,17 @@ const getCategoryLabel = (cat) => categoryMap[cat] || cat
   border-radius: 50%;
 }
 
-.income-dot { background-color: var(--color-success); }
-.expense-dot { background-color: var(--color-text-muted); }
+.income-dot {
+  background-color: var(--color-success);
+}
 
-.day-cell.selected .expense-dot { background-color: rgba(255,255,255,0.8); }
+.expense-dot {
+  background-color: var(--color-text-muted);
+}
+
+.day-cell.selected .expense-dot {
+  background-color: rgba(255, 255, 255, 0.8);
+}
 
 
 
@@ -475,17 +482,20 @@ const getCategoryLabel = (cat) => categoryMap[cat] || cat
 }
 
 .list-wrapper {
-  flex: 1; /* Take remaining height */
-  overflow-y: auto; /* Scroll internally */
-  padding-bottom: 80px; /* Space for FAB/Nav */
+  flex: 1;
+  /* Take remaining height */
+  overflow-y: auto;
+  /* Scroll internally */
+  padding-bottom: 80px;
+  /* Space for FAB/Nav */
 }
 
 .expense-item {
-  display: flex; 
-  justify-content: space-between; 
-  align-items: center; 
-  padding: 0.8rem 0.5rem; 
-  border-bottom: 1px solid rgba(255,255,255,0.05);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.8rem 0.5rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
   transition: background-color 0.2s;
 }
 
@@ -494,14 +504,17 @@ const getCategoryLabel = (cat) => categoryMap[cat] || cat
 }
 
 .icon-btn {
-  background-color: transparent; 
-  padding: 0.3rem; 
-  border-radius: 4px;
+  background-color: transparent;
+  padding: 0.5rem;
+  border-radius: 6px;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   border: 1px solid transparent;
+  min-width: 40px;
+  min-height: 40px;
+  font-size: 1.1rem;
 }
 
 .icon-btn.edit {
@@ -513,7 +526,7 @@ const getCategoryLabel = (cat) => categoryMap[cat] || cat
   padding: 0 1rem 1rem;
   text-align: right;
   font-size: 0.95rem;
-  border-bottom: 1px solid rgba(255,255,255,0.05);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
   margin-bottom: 1rem;
 }
 
@@ -529,7 +542,7 @@ const getCategoryLabel = (cat) => categoryMap[cat] || cat
   display: flex;
   justify-content: space-between;
   align-items: center;
-  background: rgba(255,255,255,0.02);
+  background: rgba(255, 255, 255, 0.02);
 }
 
 .income-title {
@@ -537,7 +550,8 @@ const getCategoryLabel = (cat) => categoryMap[cat] || cat
 }
 
 .expense-title {
-  color: white; /* or a specific expense color */
+  color: white;
+  /* or a specific expense color */
 }
 
 .section-total {
@@ -584,7 +598,7 @@ const getCategoryLabel = (cat) => categoryMap[cat] || cat
 .segmented-control button.active {
   background: rgba(255, 255, 255, 0.1);
   color: var(--color-text);
-  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
 }
 
 .date-range-widget {
@@ -595,10 +609,10 @@ const getCategoryLabel = (cat) => categoryMap[cat] || cat
   display: flex;
   align-items: center;
   gap: 0.4rem;
-  background: rgba(255,255,255,0.04);
+  background: rgba(255, 255, 255, 0.04);
   padding: 0.6rem 0.75rem;
   border-radius: 12px;
-  border: 1px solid rgba(255,255,255,0.08);
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .date-field {
@@ -626,6 +640,7 @@ const getCategoryLabel = (cat) => categoryMap[cat] || cat
   padding: 0;
   min-width: 0;
 }
+
 .date-input::-webkit-calendar-picker-indicator {
   filter: invert(1);
   opacity: 0.4;
@@ -653,6 +668,7 @@ const getCategoryLabel = (cat) => categoryMap[cat] || cat
   flex-shrink: 0;
   line-height: 1;
 }
+
 .clear-btn-small:hover {
   color: var(--color-danger);
 }
