@@ -26,15 +26,21 @@ const handleAction = (action) => {
     <div class="actions" :class="{ open: isOpen }">
       <button @click="handleAction('fav')" class="action-btn" style="transition-delay: 0ms;">
         <span class="label">常用</span>
-        <div class="icon-circle sec"><PhStar size="20" weight="fill" /></div>
+        <div class="icon-circle sec">
+          <PhStar size="20" weight="fill" />
+        </div>
       </button>
       <button @click="handleAction('income')" class="action-btn" style="transition-delay: 50ms;">
         <span class="label">收入</span>
-        <div class="icon-circle sec"><PhWallet size="20" weight="fill" /></div>
+        <div class="icon-circle sec">
+          <PhWallet size="20" weight="fill" />
+        </div>
       </button>
       <button @click="handleAction('expense')" class="action-btn" style="transition-delay: 100ms;">
         <span class="label">支出</span>
-        <div class="icon-circle prim"><PhReceipt size="20" weight="fill" /></div>
+        <div class="icon-circle prim">
+          <PhReceipt size="20" weight="fill" />
+        </div>
       </button>
     </div>
 
@@ -49,12 +55,14 @@ const handleAction = (action) => {
 <style scoped>
 .fab-container {
   position: fixed;
-  bottom: calc(env(safe-area-inset-bottom) + 100px); /* Above bottom nav */
+  bottom: calc(env(safe-area-inset-bottom) + 100px);
+  /* Above bottom nav */
   right: 20px;
   z-index: 200;
   display: flex;
   flex-direction: column;
   align-items: flex-end;
+  pointer-events: none;
 }
 
 .overlay {
@@ -63,9 +71,11 @@ const handleAction = (action) => {
   left: 0;
   width: 100vw;
   height: 100vh;
-  background: rgba(0,0,0,0.6);
+  background: rgba(0, 0, 0, 0.6);
   backdrop-filter: blur(2px);
-  z-index: 199; /* Below FAB but above everything else */
+  z-index: 199;
+  /* Below FAB but above everything else */
+  pointer-events: auto;
 }
 
 .main-fab {
@@ -82,6 +92,7 @@ const handleAction = (action) => {
   cursor: pointer;
   transition: transform 0.3s, background-color 0.3s;
   z-index: 200;
+  pointer-events: auto;
 }
 
 .main-fab:active {
@@ -100,7 +111,8 @@ const handleAction = (action) => {
   margin-bottom: 12px;
   align-items: flex-end;
   pointer-events: none;
-  z-index: 201; /* Ensure above overlay (199) and main fab (200) if needed, or just above overlay */
+  z-index: 201;
+  /* Ensure above overlay (199) and main fab (200) if needed, or just above overlay */
 }
 
 .actions.open {
@@ -132,20 +144,27 @@ const handleAction = (action) => {
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
   color: white;
 }
 
-.prim { background: var(--color-danger); } /* Expense is red/danger usually, or primary */
-.sec { background: var(--color-card-bg); border: 1px solid rgba(255,255,255,0.1); }
+.prim {
+  background: var(--color-danger);
+}
+
+/* Expense is red/danger usually, or primary */
+.sec {
+  background: var(--color-card-bg);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
 
 .label {
-  background: rgba(255,255,255,0.9);
+  background: rgba(255, 255, 255, 0.9);
   color: #0f172a;
   padding: 4px 8px;
   border-radius: 4px;
   font-size: 0.85rem;
   font-weight: 500;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 </style>
