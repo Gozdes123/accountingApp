@@ -167,26 +167,28 @@ onMounted(() => {
 
 .favorites-grid {
   display: flex;
-  gap: 1rem;
-  overflow-x: auto;
+  flex-direction: column;
+  gap: 0.8rem;
+  max-height: 60vh;
+  overflow-y: auto;
+  overflow-x: hidden;
   padding-bottom: 0.5rem;
   padding-top: 0.5rem;
 }
 
 .fav-card {
-  flex: 0 0 auto;
-  width: 140px;
+  width: 100%;
+  box-sizing: border-box;
   background: var(--color-card-bg);
   border: 1px solid rgba(255, 255, 255, 0.1);
-  padding: 0.8rem;
+  padding: 0.8rem 1rem;
   border-radius: 12px;
   cursor: pointer;
-  position: relative;
   transition: transform 0.2s, background-color 0.2s;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
-  text-align: center;
+  gap: 1rem;
 }
 
 .fav-card:hover {
@@ -202,42 +204,66 @@ onMounted(() => {
 
 .fav-icon {
   font-size: 1.5rem;
-  margin-bottom: 0.3rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.fav-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+  text-align: left;
 }
 
 .fav-title {
   font-weight: 500;
-  font-size: 0.95rem;
+  font-size: 1rem;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  color: var(--color-text);
   width: 100%;
 }
 
 .fav-amount {
   color: var(--color-success);
   font-weight: bold;
-  font-size: 0.9rem;
+  font-size: 0.95rem;
+}
+
+.fav-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
 }
 
 .delete-btn {
-  position: absolute;
-  top: 0;
-  right: 0;
   background: transparent;
   color: var(--color-text-muted);
   border: none;
-  font-size: 1.2rem;
+  font-size: 1.5rem;
   line-height: 1;
   padding: 8px;
-  min-width: 36px;
-  min-height: 36px;
+  width: 36px;
+  height: 36px;
   display: flex;
-  align-items: flex-start;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  transition: all 0.2s;
 }
 
 .delete-btn:hover {
+  background: rgba(239, 68, 68, 0.1);
   color: var(--color-danger);
   transform: none;
   box-shadow: none;
