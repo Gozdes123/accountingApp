@@ -15,9 +15,17 @@ const props = defineProps({
 
 const emit = defineEmits(['add-expense', 'update:type'])
 
+const getLocalDateStr = () => {
+  const d = new Date()
+  const year = d.getFullYear()
+  const month = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
 const title = ref('')
 const amount = ref('')
-const date = ref(new Date().toISOString().split('T')[0])
+const date = ref(getLocalDateStr())
 const type = ref(props.initialType) // 'expense' or 'income'
 const category = ref(props.initialType === 'income' ? 'Salary' : 'Food')
 const accountId = ref('') // Selected Account ID

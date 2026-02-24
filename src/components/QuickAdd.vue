@@ -4,9 +4,18 @@ import { supabase } from '../lib/supabaseClient'
 
 const emit = defineEmits(['add-expense'])
 
+const getLocalDateStr = () => {
+  const d = new Date()
+  const year = d.getFullYear()
+  const month = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
 const favorites = ref([])
 const showAddModal = ref(false)
 const newFav = ref({ title: '', amount: '', category: 'Food' })
+const selectedDate = ref(getLocalDateStr())
 
 const fetchFavorites = async () => {
   const { data, error } = await supabase
@@ -45,7 +54,7 @@ const useFavorite = (fav) => {
     title: fav.title,
     amount: fav.amount,
     category: fav.category,
-    date: new Date().toISOString().split('T')[0]
+    date: selectedDate.value
   }
   emit('add-expense', expense)
 }
@@ -69,6 +78,10 @@ onMounted(() => {
 <template>
   <div class="favorites-section">
     <div class="header">
+      <div class="fav-date-selector">
+        <label>日期:</label>
+        <input type="date" v-model="selectedDate" />
+      </div>
       <button @click="showAddModal = !showAddModal" class="add-btn" :class="{ 'cancel': showAddModal }">
         {{ showAddModal ? '取消' : '+ 新增常用' }}
       </button>
@@ -122,9 +135,29 @@ onMounted(() => {
 
 .header {
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
   align-items: center;
   margin-bottom: 1rem;
+}
+
+.fav-date-selector {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.fav-date-selector label {
+  color: var(--color-text-muted);
+  font-size: 0.9rem;
+}
+
+.fav-date-selector input {
+  padding: 0.3rem 0.5rem;
+  font-size: 0.9rem;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: white;
+  border-radius: 6px;
 }
 
 .header h3 {
