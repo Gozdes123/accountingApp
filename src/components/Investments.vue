@@ -78,6 +78,31 @@ const fetchUsdTwdRate = async () => {
   }
 }
 
+// Yahoo Finance symbol resolver
+const getYahooSymbol = (symbol, assetClass) => {
+  if (!symbol) return ''
+  const sym = symbol.trim().toUpperCase()
+  const cls = (assetClass || '').trim().toLowerCase()
+  
+  // If it already has a suffix like .TW, .TWO, -USD, =X, return as is
+  if (sym.endsWith('.TW') || sym.endsWith('.TWO') || sym.includes('-') || sym.includes('=')) {
+    return sym
+  }
+  
+  // Taiwan stock: 4-6 digit numeric code or tw_stock class
+  if (cls === 'tw_stock' || /^\d{4,6}$/.test(sym)) {
+    return `${sym}.TW`
+  }
+  
+  // Crypto: BTC, etc. -> BTC-USD
+  if (cls === 'crypto' || ['BTC', 'ETH', 'SOL', 'USDT', 'USDC', 'DOGE', 'BNB'].includes(sym)) {
+    return `${sym}-USD`
+  }
+  
+  // Default to symbol as is (for US stocks)
+  return sym
+}
+
 // 2. Stock price via Vite proxy (dev) / allorigins proxy (prod) → Yahoo Finance
 const fetchYahooPrice = async (symbol) => {
   try {
@@ -118,12 +143,8 @@ const refreshPrices = async () => {
   }
 
   for (const [sym, info] of Object.entries(symbolMap)) {
-    let price = null
-    if (info.cls === 'tw_stock') {
-      price = await fetchYahooPrice(`${sym}.TW`)
-    } else if (info.cls === 'us_stock') {
-      price = await fetchYahooPrice(sym)
-    }
+    const querySym = getYahooSymbol(sym, info.cls)
+    const price = await fetchYahooPrice(querySym)
 
     if (price !== null) {
       const now = new Date().toISOString()

@@ -1,5 +1,5 @@
 <script setup>
-import { PhHouse, PhListDashes, PhCalendarCheck, PhTrendUp, PhWallet, PhBank } from '@phosphor-icons/vue'
+import { PhChartBar, PhChartLine, PhDotsThree } from '@phosphor-icons/vue'
 
 defineProps({
   currentTab: {
@@ -11,68 +11,83 @@ defineProps({
 const emit = defineEmits(['update:currentTab'])
 
 const navItems = [
-  { id: 'dashboard', label: '總覽', icon: PhHouse },
-  { id: 'transactions', label: '帳務', icon: PhListDashes },
-  { id: 'assets', label: '資產', icon: PhBank },
-  { id: 'investments', label: '投資', icon: PhTrendUp },
+  { id: 'list', icon: PhChartBar },
+  { id: 'trend', icon: PhChartLine },
+  { id: 'settings', icon: PhDotsThree }
 ]
 </script>
 
 <template>
-  <nav class="bottom-nav">
-    <button 
-      v-for="item in navItems" 
-      :key="item.id"
-      :class="{ active: currentTab === item.id }"
-      @click="emit('update:currentTab', item.id)"
-      class="nav-item"
-    >
-      <component :is="item.icon" size="24" weight="fill" v-if="currentTab === item.id" />
-      <component :is="item.icon" size="24" weight="regular" v-else />
-      <span class="nav-label">{{ item.label }}</span>
-    </button>
-  </nav>
+  <div class="bottom-nav-container">
+    <nav class="bottom-nav">
+      <button 
+        v-for="item in navItems" 
+        :key="item.id"
+        :class="{ active: currentTab === item.id }"
+        @click="emit('update:currentTab', item.id)"
+        class="nav-item"
+      >
+        <component :is="item.icon" class="nav-icon" weight="bold" />
+      </button>
+    </nav>
+  </div>
 </template>
 
 <style scoped>
-.bottom-nav {
+.bottom-nav-container {
   position: fixed;
-  bottom: 0;
-  left: 0;
-  width: 100%;
-  height: 60px; /* Base hit area */
-  background: rgba(15, 23, 42, 0.95); /* Dark background */
-  backdrop-filter: blur(12px);
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  width: auto;
+}
+
+.bottom-nav {
   display: flex;
-  justify-content: space-around;
+  justify-content: space-between;
   align-items: center;
-  z-index: 100;
-  /* Add safe area plus a 20px extra lift */
-  padding-bottom: calc(env(safe-area-inset-bottom) + 20px);
-  padding-top: 4px; /* Slight balance */
+  gap: 1.5rem;
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  border-radius: 99px;
+  padding: 8px 18px;
+  box-shadow: 
+    0 10px 30px rgba(0, 0, 0, 0.05),
+    0 1px 2px rgba(0, 0, 0, 0.05);
 }
 
 .nav-item {
   background: none;
   border: none;
-  color: var(--color-text-muted);
+  color: #828e9e;
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 4px;
-  width: 100%;
-  height: 100%;
-  transition: color 0.2s;
+  padding: 6px;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: none !important; /* Remove global button shadow */
+}
+
+.nav-item:hover {
+  color: #1a1e26;
+  transform: scale(1.08);
+}
+
+.nav-item:active {
+  transform: scale(0.95);
+}
+
+.nav-icon {
+  font-size: 22px;
 }
 
 .nav-item.active {
-  color: var(--color-primary);
-}
-
-.nav-label {
-  font-size: 0.7rem;
-  margin-top: 2px;
+  color: #1a1e26;
+  transform: scale(1.1);
 }
 </style>

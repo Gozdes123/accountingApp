@@ -1,54 +1,893 @@
 <script setup>
-import { ref, onMounted, onActivated, computed, watch } from 'vue'
+import { ref, onMounted, onActivated, computed } from 'vue'
 import { supabase } from '../lib/supabaseClient'
-import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement, Title } from 'chart.js'
+import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement, Title, Filler } from 'chart.js'
 import { Doughnut, Line } from 'vue-chartjs'
-import { PhEye, PhEyeSlash, PhTrendUp, PhTrendDown } from '@phosphor-icons/vue'
+import BottomNav from './BottomNav.vue'
+import { 
+  PhEye, PhEyeSlash, PhPlus, PhTrash, PhWallet, PhTrendUp, 
+  PhArrowDownLeft, PhBank, PhCoins, PhCalendar, PhArrowClockwise, PhCaretLeft, PhCaretRight,
+  PhHouse, PhCar, PhLock, PhUsers, PhCreditCard,
+  PhCloudArrowUp, PhCards, PhCurrencyCny, PhChartBar, PhCurrencyBtc, PhLeaf, PhBuildings, PhCube,
+  PhCheck, PhAppleLogo, PhWechatLogo, PhBookOpen, PhUser, PhCheckCircle, PhInfo, PhMinusCircle, PhQrCode, PhCaretDown, PhCaretUp
+} from '@phosphor-icons/vue'
 
-ChartJS.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement, Title)
+ChartJS.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement, Title, Filler)
 
-const props = defineProps({
-  expenses: {
-    type: Array,
-    required: true,
-    default: () => []
-  },
-  incomes: {
-    type: Array,
-    required: true,
-    default: () => []
+// ── State ─────────────────────────────────────────────────────────
+const currentTab = ref('list') // list, trend, settings
+const accounts = ref([])
+const investments = ref([])
+const historyRecords = ref([])
+const usdTwdRate = ref(32)
+const isInitialDataLoaded = ref(false)
+const isHidden = ref(true)
+const isRefreshing = ref(false)
+
+const isTreeView = ref(false)
+
+const listExpanded = ref({
+  liquid: false,
+  invest: false,
+  fixed: false,
+  receivable: false,
+  liab: false
+})
+
+const toggleListExpand = (category) => {
+  listExpanded.value[category] = !listExpanded.value[category]
+}
+
+const filteredAccounts = (category) => {
+  const liquidTypes = ['Bank', 'Cash', 'E-Wallet', 'OtherLiquid']
+  const fixedTypes = ['RealEstate', 'Car', 'OtherFixed', 'Other']
+  const liabTypes = ['Credit Card', 'Liability', 'Loan', 'Payable', 'OtherLiab']
+  
+  if (category === 'liquid') {
+    return accounts.value.filter(a => liquidTypes.includes(a.type))
+  }
+  if (category === 'fixed') {
+    return accounts.value.filter(a => fixedTypes.includes(a.type))
+  }
+  if (category === 'receivable') {
+    return accounts.value.filter(a => a.type === 'Receivable')
+  }
+  if (category === 'liab') {
+    return accounts.value.filter(a => liabTypes.includes(a.type))
+  }
+  return []
+}
+
+const investSubtitle = computed(() => {
+  const symbols = groupedInvestments.value.map(g => g.symbol)
+  return symbols.length > 0 ? symbols.join('、') : '無投資項目'
+})
+
+const liquidPct = computed(() => {
+  if (totalPositiveAssets.value === 0) return 0
+  return Math.round((totalLiquidAssets.value / totalPositiveAssets.value) * 100)
+})
+const investPct = computed(() => {
+  if (totalPositiveAssets.value === 0) return 0
+  return Math.round((totalInvestments.value / totalPositiveAssets.value) * 100)
+})
+const fixedPct = computed(() => {
+  if (totalPositiveAssets.value === 0) return 0
+  return Math.round((totalFixedAssets.value / totalPositiveAssets.value) * 100)
+})
+const receivablePct = computed(() => {
+  if (totalPositiveAssets.value === 0) return 0
+  return Math.round((totalReceivables.value / totalPositiveAssets.value) * 100)
+})
+const liabPct = computed(() => {
+  if (totalPositiveAssets.value === 0 || totalLiabilities.value === 0) return 0
+  const pct = Math.round((totalLiabilities.value / totalPositiveAssets.value) * 100)
+  return Math.max(1, pct)
+})
+
+const isEditing = ref(false)
+const editingId = ref(null)
+
+const getCategoryFromType = (type) => {
+  const liquidTypes = ['Bank', 'Cash', 'E-Wallet', 'OtherLiquid']
+  const fixedTypes = ['RealEstate', 'Car', 'OtherFixed', 'Other']
+  const liabTypes = ['Credit Card', 'Liability', 'Loan', 'Payable', 'OtherLiab']
+  
+  if (liquidTypes.includes(type)) return 'liquid'
+  if (fixedTypes.includes(type)) return 'fixed'
+  if (liabTypes.includes(type)) return 'liab'
+  if (type === 'Receivable') return 'receivable'
+  return 'liquid'
+}
+
+const editAccount = (acc) => {
+  isEditing.value = true
+  editingId.value = acc.id
+  
+  newAsset.value = {
+    category: getCategoryFromType(acc.type),
+    type: acc.type,
+    name: acc.name,
+    balance: acc.balance,
+    include_in_chart: acc.include_in_chart ?? true,
+    remarks: acc.remarks ?? '',
+    auto_record: acc.auto_record ? JSON.parse(JSON.stringify(acc.auto_record)) : null,
+    custom_group: acc.custom_group ?? '',
+    funding_account_id: null
+  }
+  
+  subListType.value = null
+  showAddModal.value = true
+  addModalStep.value = 2
+}
+
+const editInvestment = (inv) => {
+  isEditing.value = true
+  editingId.value = inv.id
+  
+  newAsset.value = {
+    category: 'invest',
+    type: inv.asset_class || inv.type || 'Stock',
+    name: inv.name || '',
+    symbol: inv.symbol || '',
+    quantity: inv.quantity || 0,
+    buy_price: inv.average_cost || inv.buy_price || 0,
+    buy_date: inv.buy_date || new Date().toISOString().split('T')[0],
+    custom_group: inv.custom_group ?? '',
+    funding_account_id: inv.funding_account_id || null
+  }
+  
+  subListType.value = null
+  showAddModal.value = true
+  addModalStep.value = 2
+}
+
+const editInvestmentBySymbol = (symbol) => {
+  const inv = investments.value.find(i => i.symbol.toUpperCase() === symbol.toUpperCase())
+  if (inv) {
+    editInvestment(inv)
+  }
+}
+
+const handleTagInput = (e) => {
+  let val = e.target.value
+  if (val && !val.startsWith('#')) {
+    newAsset.value.auto_record.tag = '#' + val
+  } else {
+    newAsset.value.auto_record.tag = val
+  }
+}
+
+const subListType = ref(null)
+const toastMessage = ref('')
+const showToast = (msg) => {
+  toastMessage.value = msg
+  setTimeout(() => {
+    toastMessage.value = ''
+  }, 4000)
+}
+
+const initAutoRecord = () => {
+  newAsset.value.auto_record = {
+    enabled: true, 
+    type: 'expense',
+    amount: 0,
+    day: 1,
+    tag: '',
+    expiry: 'forever',
+    last_processed_date: null
+  }
+  addModalStep.value = 3
+}
+
+const nextRecordDateStr = computed(() => {
+  if (!newAsset.value.auto_record) return ''
+  const today = new Date()
+  let targetMonth = today.getMonth()
+  let targetYear = today.getFullYear()
+  const day = Number(newAsset.value.auto_record.day || 1)
+  
+  if (today.getDate() >= day) {
+    targetMonth++
+    if (targetMonth > 11) {
+      targetMonth = 0
+      targetYear++
+    }
+  }
+  return `${targetMonth + 1}月${day}日`
+})
+
+// 新增項目 Modal
+const showAddModal = ref(false)
+const addModalStep = ref(1) // 1 = 選擇類別, 2 = 填寫表單
+const expandedCategories = ref({
+  liquid: true,
+  invest: false,
+  fixed: false,
+  receivable: false,
+  liab: false
+})
+const isSaving = ref(false)
+const saveError = ref('')
+const newAsset = ref({
+  category: 'liquid', // liquid, invest, fixed, receivable, liab
+  type: 'Bank',       // Bank, Cash, E-Wallet, OtherLiquid, Fund, Stock, Crypto, Metal, OtherInvest, RealEstate, Car, OtherFixed, Receivable, Credit Card, Loan, Payable, OtherLiab
+  name: '',
+  balance: '',
+  symbol: '',
+  quantity: '',
+  buy_price: '',
+  buy_date: new Date().toISOString().split('T')[0],
+  custom_group: '',
+  funding_account_id: null
+})
+
+// 折線圖時間篩選
+const timeFilter = ref('6M') // 1M, 3M, 6M, ALL
+
+const selectedSymbol = ref('')
+const selectedInvestment = computed(() => {
+  const symbol = selectedSymbol.value.toUpperCase()
+  if (!symbol) return null
+  const matching = investments.value.filter(i => i.symbol.toUpperCase() === symbol)
+  if (matching.length === 0) return null
+  
+  const name = matching[0].name || symbol
+  const currency = matching[0].currency || (isTaiwanStock(symbol) ? 'TWD' : 'USD')
+  const type = matching[0].asset_class || matching[0].type || 'Stock'
+  const current_price = matching[0].current_price || 0
+  const qty = matching.reduce((sum, item) => sum + Number(item.quantity || 0), 0)
+  const totalVal = qty * current_price
+  const totalValTwd = currency === 'USD' ? totalVal * usdTwdRate.value : totalVal
+  
+  return {
+    symbol,
+    name,
+    currency,
+    type,
+    current_price,
+    quantity: qty,
+    value: totalVal,
+    valueTwd: totalValTwd,
+    lots: [...matching].sort((a, b) => new Date(b.buy_date || b.created_at) - new Date(a.buy_date || a.created_at))
   }
 })
 
-const emit = defineEmits(['edit-expense'])
-
-const totalIncome = computed(() => {
-  return props.incomes.reduce((sum, item) => sum + Number(item.amount), 0)
-})
-const totalExpense = computed(() => {
-  return props.expenses.reduce((sum, item) => sum + Number(item.amount), 0)
-})
-const totalInvestmentValue = ref(0)
-const totalAssets = ref(0)
-const usdTwdRate = ref(32)
-
-// 淨資產 = 帳戶資產 + 投資市值 + 現金流（收入 - 支出）
-const cashBalance = computed(() => totalIncome.value - totalExpense.value)
-const netWorth = computed(() => totalAssets.value + cashBalance.value + totalInvestmentValue.value)
-
-// Privacy Mode
-const isHidden = ref(true)
-const togglePrivacy = () => {
-  isHidden.value = !isHidden.value
+const openInvestmentDetail = (symbol) => {
+  selectedSymbol.value = symbol.toUpperCase()
+  showAddModal.value = true
+  addModalStep.value = 4
 }
 
-// Timeframe Analysis
+const adjustSharesVal = ref('')
+const adjustAction = ref('plus')
+const adjustPrice = ref(0)
+const adjustRemarks = ref('增減金額')
+const modifySharesVal = ref('')
+const modifyPrice = ref(0)
+const modifyRemarks = ref('修改餘額')
 
+const openAdjustShares = () => {
+  const inv = selectedInvestment.value
+  if (!inv) return
+  adjustSharesVal.value = ''
+  adjustAction.value = 'plus'
+  adjustPrice.value = inv.current_price
+  adjustRemarks.value = '增減金額'
+  addModalStep.value = 5 // Step 5: Adjust Shares
+}
 
-const isInitialDataLoaded = ref(false)
+const openModifyBalance = () => {
+  const inv = selectedInvestment.value
+  if (!inv) return
+  modifySharesVal.value = inv.quantity
+  modifyPrice.value = inv.current_price
+  modifyRemarks.value = '修改餘額'
+  addModalStep.value = 6 // Step 6: Modify Balance
+}
 
-const fetchFinancialData = async () => {
-  // 1. 抓 USD/TWD 匯率
+const submitAdjustShares = async () => {
+  const inv = selectedInvestment.value
+  if (!inv) return
+  const qtyChange = Number(adjustSharesVal.value || 0)
+  if (qtyChange <= 0) return
+  
+  const finalQtyChange = adjustAction.value === 'plus' ? qtyChange : -qtyChange
+  const buyPrice = Number(adjustPrice.value || 0)
+  
+  const lots = investments.value.filter(i => i.symbol.toUpperCase() === inv.symbol.toUpperCase())
+  if (lots.length > 0) {
+    if (finalQtyChange > 0) {
+      const generatedId = 'local-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9)
+      const nowStr = new Date().toISOString()
+      const payload = {
+        id: generatedId,
+        asset_class: lots[0].asset_class,
+        symbol: inv.symbol.toUpperCase(),
+        name: inv.name,
+        quantity: finalQtyChange,
+        average_cost: buyPrice,
+        currency: lots[0].currency,
+        type: 'Stock',
+        current_price: buyPrice,
+        buy_price: buyPrice,
+        buy_date: new Date().toISOString().split('T')[0],
+        created_at: nowStr,
+        price_updated_at: nowStr
+      }
+      try {
+        await supabase.from('investments').insert([payload])
+      } catch {}
+      investments.value.unshift(payload)
+    } else {
+      let remainingToSubtract = Math.abs(finalQtyChange)
+      for (let i = 0; i < lots.length; i++) {
+        const lot = lots[i]
+        if (lot.quantity >= remainingToSubtract) {
+          lot.quantity -= remainingToSubtract
+          remainingToSubtract = 0
+          try {
+            await supabase.from('investments').update({ quantity: lot.quantity }).eq('id', lot.id)
+          } catch {}
+          break;
+        } else {
+          remainingToSubtract -= lot.quantity
+          lot.quantity = 0
+          try {
+            await supabase.from('investments').update({ quantity: 0 }).eq('id', lot.id)
+          } catch {}
+        }
+      }
+      investments.value = investments.value.filter(i => i.quantity > 0)
+    }
+    localStorage.setItem('local_investments', JSON.stringify(investments.value))
+  }
+  
+  await fetchAllData()
+  addModalStep.value = 4
+}
+
+const submitModifyBalance = async () => {
+  const inv = selectedInvestment.value
+  if (!inv) return
+  const newQty = Number(modifySharesVal.value || 0)
+  const buyPrice = Number(modifyPrice.value || 0)
+  
+  const lots = investments.value.filter(i => i.symbol.toUpperCase() === inv.symbol.toUpperCase())
+  if (lots.length > 0) {
+    const firstLot = lots[0]
+    const oldQty = Number(firstLot.quantity || 0)
+    const oldPrice = Number(firstLot.buy_price || firstLot.average_cost || 0)
+    
+    // Adjust cash account if linked
+    if (firstLot.funding_account_id) {
+      const oldCost = oldQty * oldPrice
+      const oldCostTwd = firstLot.currency === 'USD' ? oldCost * usdTwdRate.value : oldCost
+      
+      const newCost = newQty * buyPrice
+      const newCostTwd = firstLot.currency === 'USD' ? newCost * usdTwdRate.value : newCost
+      
+      const diffTwd = newCostTwd - oldCostTwd
+      
+      accounts.value = accounts.value.map(acc => {
+        if (acc.id === firstLot.funding_account_id) {
+          acc.balance -= diffTwd
+          if (acc.balance < 0) acc.balance = 0
+          try {
+            supabase.from('accounts').update({ balance: acc.balance }).eq('id', acc.id)
+          } catch (dbErr) {
+            console.warn('Sync account balance after inline modification failed:', dbErr)
+          }
+        }
+        return acc
+      })
+      localStorage.setItem('local_accounts', JSON.stringify(accounts.value))
+    }
+    
+    firstLot.quantity = newQty
+    firstLot.average_cost = buyPrice
+    firstLot.current_price = buyPrice
+    firstLot.buy_price = buyPrice
+    
+    try {
+      await supabase.from('investments').update({ quantity: newQty, average_cost: buyPrice, current_price: buyPrice, buy_price: buyPrice }).eq('id', firstLot.id)
+      for (let i = 1; i < lots.length; i++) {
+        await supabase.from('investments').delete().eq('id', lots[i].id)
+      }
+    } catch {}
+    
+    investments.value = investments.value.filter(i => i.symbol.toUpperCase() !== inv.symbol.toUpperCase() || i.id === firstLot.id)
+    const localIdx = investments.value.findIndex(i => i.id === firstLot.id)
+    if (localIdx !== -1) {
+      investments.value[localIdx].quantity = newQty
+      investments.value[localIdx].average_cost = buyPrice
+      investments.value[localIdx].current_price = buyPrice
+      investments.value[localIdx].buy_price = buyPrice
+    }
+    
+    localStorage.setItem('local_investments', JSON.stringify(investments.value))
+  }
+  
+  await fetchAllData()
+  addModalStep.value = 4
+}
+
+// ── Calculations ──────────────────────────────────────────────────
+// 1. 流動資金 (Bank / Cash / E-Wallet / OtherLiquid)
+const totalLiquidAssets = computed(() => {
+  const liquidTypes = ['Bank', 'Cash', 'E-Wallet', 'OtherLiquid']
+  return accounts.value
+    .filter(a => liquidTypes.includes(a.type) && a.include_in_chart !== false)
+    .reduce((sum, acc) => sum + Math.abs(Number(acc.balance)), 0)
+})
+
+// 2. 投資部位市值
+const totalInvestments = computed(() => {
+  return investments.value.reduce((sum, item) => {
+    if (item.include_in_chart === false) return sum
+    const qty = Number(item.quantity || 0)
+    const price = Number(item.current_price || 0)
+    const raw = qty * price
+    const currency = item.currency || (item.asset_class === 'us_stock' ? 'USD' : 'TWD')
+    return sum + (currency === 'USD' ? raw * usdTwdRate.value : raw)
+  }, 0)
+})
+
+// 3. 固定資產 (RealEstate / Car / OtherFixed)
+const totalFixedAssets = computed(() => {
+  const fixedTypes = ['RealEstate', 'Car', 'OtherFixed', 'Other'] // Include fallback type 'Other'
+  return accounts.value
+    .filter(a => fixedTypes.includes(a.type) && a.include_in_chart !== false)
+    .reduce((sum, acc) => sum + Math.abs(Number(acc.balance)), 0)
+})
+
+// 4. 應收款項目 (Receivable)
+const totalReceivables = computed(() => {
+  return accounts.value
+    .filter(a => a.type === 'Receivable' && a.include_in_chart !== false)
+    .reduce((sum, acc) => sum + Math.abs(Number(acc.balance)), 0)
+})
+
+// 5. 負債項目 (Liability / Credit Card / Loan / Payable / OtherLiab)
+const totalLiabilities = computed(() => {
+  const liabTypes = ['Credit Card', 'Liability', 'Loan', 'Payable', 'OtherLiab']
+  return accounts.value
+    .filter(a => liabTypes.includes(a.type) && a.include_in_chart !== false)
+    .reduce((sum, acc) => sum + Math.abs(Number(acc.balance)), 0)
+})
+
+// 6. 總淨資產 = 流動資金 + 投資部位 + 固定資產 + 應收款 - 負債
+const netWorth = computed(() => {
+  return totalLiquidAssets.value + totalInvestments.value + totalFixedAssets.value + totalReceivables.value - totalLiabilities.value
+})
+
+// 左側垂直佔比條比例計算 (僅計算正資產)
+const totalPositiveAssets = computed(() => {
+  return totalLiquidAssets.value + totalInvestments.value + totalFixedAssets.value + totalReceivables.value
+})
+const liquidBarPct = computed(() => {
+  if (totalPositiveAssets.value === 0) return 0
+  return (totalLiquidAssets.value / totalPositiveAssets.value) * 100
+})
+const investBarPct = computed(() => {
+  if (totalPositiveAssets.value === 0) return 0
+  return (totalInvestments.value / totalPositiveAssets.value) * 100
+})
+const fixedBarPct = computed(() => {
+  if (totalPositiveAssets.value === 0) return 0
+  return (totalFixedAssets.value / totalPositiveAssets.value) * 100
+})
+const receivableBarPct = computed(() => {
+  if (totalPositiveAssets.value === 0) return 0
+  return (totalReceivables.value / totalPositiveAssets.value) * 100
+})
+
+// 卡片副標題文字串接
+const liquidSubtitle = computed(() => {
+  const liquidTypes = ['Bank', 'Cash', 'E-Wallet', 'OtherLiquid']
+  const matched = accounts.value.filter(a => liquidTypes.includes(a.type))
+  return matched.length > 0 ? matched.map(a => a.name).join('、') : '無帳戶'
+})
+const fixedSubtitle = computed(() => {
+  const fixedTypes = ['RealEstate', 'Car', 'OtherFixed', 'Other']
+  const matched = accounts.value.filter(a => fixedTypes.includes(a.type))
+  return matched.length > 0 ? matched.map(a => a.name).join('、') : '無固定資產'
+})
+const receivableSubtitle = computed(() => {
+  const matched = accounts.value.filter(a => a.type === 'Receivable')
+  return matched.length > 0 ? matched.map(a => a.name).join('、') : '無應收款項'
+})
+const liabSubtitle = computed(() => {
+  const liabTypes = ['Credit Card', 'Liability', 'Loan', 'Payable', 'OtherLiab']
+  const matched = accounts.value.filter(a => liabTypes.includes(a.type))
+  return matched.length > 0 ? matched.map(a => a.name).join('、') : '無負債'
+})
+
+// 投資標的合併與佔總投資百分比計算
+const groupedInvestments = computed(() => {
+  const groups = {}
+  
+  investments.value.forEach(inv => {
+    const sym = inv.symbol.toUpperCase()
+    if (!groups[sym]) {
+      groups[sym] = {
+        symbol: sym,
+        name: inv.name || sym,
+        currency: inv.currency || 'TWD',
+        current_price: Number(inv.current_price || 0),
+        qty: 0,
+        price_updated_at: inv.price_updated_at,
+        custom_group: inv.custom_group || ''
+      }
+    }
+    groups[sym].qty += Number(inv.quantity || 0)
+    if (inv.price_updated_at && (!groups[sym].price_updated_at || inv.price_updated_at > groups[sym].price_updated_at)) {
+      groups[sym].price_updated_at = inv.price_updated_at
+      groups[sym].current_price = Number(inv.current_price || 0)
+    }
+  })
+
+  return Object.values(groups).map(g => {
+    const rawVal = g.qty * g.current_price
+    const valTwd = g.currency === 'USD' ? rawVal * usdTwdRate.value : rawVal
+    const pct = totalInvestments.value > 0 ? (valTwd / totalInvestments.value) * 100 : 0
+    return {
+      ...g,
+      valueTwd: valTwd,
+      percentage: pct
+    }
+  }).sort((a, b) => b.valueTwd - a.valueTwd)
+})
+
+// 提取目前所有已建立的群組
+const existingGroups = computed(() => {
+  const groups = new Set()
+  if (Array.isArray(accounts.value)) {
+    accounts.value.forEach(acc => {
+      if (acc.custom_group && acc.custom_group.trim()) {
+        groups.add(acc.custom_group.trim())
+      }
+    })
+  }
+  if (Array.isArray(investments.value)) {
+    investments.value.forEach(inv => {
+      if (inv.custom_group && inv.custom_group.trim()) {
+        groups.add(inv.custom_group.trim())
+      }
+    })
+  }
+  return Array.from(groups)
+})
+
+// 依自訂群組分組資產
+const groupAccountsByCustomGroup = (category) => {
+  const list = filteredAccounts(category)
+  const grouped = {}
+  list.forEach(acc => {
+    const g = acc.custom_group ? acc.custom_group.trim() : ''
+    if (!grouped[g]) grouped[g] = []
+    grouped[g].push(acc)
+  })
+  const result = []
+  Object.keys(grouped).forEach(k => {
+    if (k !== '') {
+      result.push({ name: k, items: grouped[k] })
+    }
+  })
+  result.sort((a, b) => a.name.localeCompare(b.name))
+  if (grouped[''] && grouped[''].length > 0) {
+    result.unshift({ name: '', items: grouped[''] })
+  }
+  return result
+}
+
+// 依自訂群組分組投資
+const groupedInvestmentsByCustomGroup = computed(() => {
+  const list = groupedInvestments.value
+  const grouped = {}
+  list.forEach(inv => {
+    const g = inv.custom_group ? inv.custom_group.trim() : ''
+    if (!grouped[g]) grouped[g] = []
+    grouped[g].push(inv)
+  })
+  const result = []
+  Object.keys(grouped).forEach(k => {
+    if (k !== '') {
+      result.push({ name: k, items: grouped[k] })
+    }
+  })
+  result.sort((a, b) => a.name.localeCompare(b.name))
+  if (grouped[''] && grouped[''].length > 0) {
+    result.unshift({ name: '', items: grouped[''] })
+  }
+  return result
+})
+
+// 歷史趨勢折線圖篩選
+const trendType = ref('net_worth') // net_worth or liquid_invest
+const customStartDate = ref(new Date(Date.now() - 180 * 24 * 3600 * 1000).toISOString().split('T')[0])
+const customEndDate = ref(new Date().toISOString().split('T')[0])
+
+const filteredHistory = computed(() => {
+  if (historyRecords.value.length === 0) return []
+  const now = new Date()
+  let limitDate = new Date()
+  
+  if (timeFilter.value === '30D') {
+    limitDate.setDate(now.getDate() - 30);
+    return historyRecords.value.filter(r => new Date(r.date) >= limitDate);
+  } else if (timeFilter.value === '6M') {
+    limitDate.setMonth(now.getMonth() - 6);
+    return historyRecords.value.filter(r => new Date(r.date) >= limitDate);
+  } else if (timeFilter.value === '1Y') {
+    limitDate.setFullYear(now.getFullYear() - 1);
+    return historyRecords.value.filter(r => new Date(r.date) >= limitDate);
+  } else if (timeFilter.value === 'YTD') {
+    limitDate = new Date(now.getFullYear(), 0, 1);
+    return historyRecords.value.filter(r => new Date(r.date) >= limitDate);
+  } else if (timeFilter.value === 'ALL') {
+    const start = new Date(customStartDate.value)
+    const end = new Date(customEndDate.value)
+    end.setHours(23, 59, 59, 999)
+    return historyRecords.value.filter(r => {
+      const d = new Date(r.date)
+      return d >= start && d <= end
+    })
+  }
+  return historyRecords.value
+})
+
+// 雙模式走勢數據計算 (結合當前實際比例與歷史淨值)
+const trendDatasets = computed(() => {
+  const history = filteredHistory.value
+  if (history.length === 0) return []
+  
+  const todayNetWorth = netWorth.value
+  const todayLiabilities = totalLiabilities.value
+  const todayLiquid = totalLiquidAssets.value
+  const todayInvest = totalInvestments.value
+  
+  const totalAssets = todayNetWorth + todayLiabilities
+  const liabRatio = totalAssets > 0 ? todayLiabilities / totalAssets : 0
+  const nwRatio = totalAssets > 0 ? todayNetWorth / totalAssets : 1
+  
+  const totalPos = todayLiquid + todayInvest
+  const liquidRatio = totalPos > 0 ? todayLiquid / totalPos : 0.5
+  const investRatio = totalPos > 0 ? todayInvest / totalPos : 0.5
+  
+  return history.map((r, idx) => {
+    // 預估歷史節點數值，最後一個節點強制符合當前真實數據
+    if (idx === history.length - 1) {
+      return {
+        date: r.date,
+        netWorth: todayNetWorth,
+        liabilities: todayLiabilities,
+        liquid: todayLiquid,
+        invest: todayInvest
+      }
+    }
+    
+    // 計算該歷史節點的資產總值與正資產總值
+    const estTotalAssets = r.amount / (nwRatio || 1)
+    const estLiabilities = Math.abs(estTotalAssets * liabRatio)
+    
+    const estTotalPos = r.amount + estLiabilities
+    const estLiquid = estTotalPos * liquidRatio
+    const estInvest = estTotalPos * investRatio
+    
+    return {
+      date: r.date,
+      netWorth: r.amount,
+      liabilities: estLiabilities,
+      liquid: estLiquid,
+      invest: estInvest
+    }
+  })
+})
+
+const trendDateRangeText = computed(() => {
+  const history = filteredHistory.value
+  if (history.length === 0) return ''
+  const start = new Date(history[0].date)
+  const end = new Date(history[history.length - 1].date)
+  return `${start.getFullYear()}年${start.getMonth() + 1}月至${end.getMonth() + 1}月`
+})
+
+const netWorthSummaryText = computed(() => {
+  const datasets = trendDatasets.value
+  if (datasets.length < 2) return { nw: '我的淨資產沒有改變', liab: '我的負債沒有改變' }
+  
+  const first = datasets[0]
+  const last = datasets[datasets.length - 1]
+  
+  const nwDiff = last.netWorth - first.netWorth
+  const nwPct = first.netWorth !== 0 ? Math.round((nwDiff / Math.abs(first.netWorth)) * 100) : (nwDiff !== 0 ? 100 : 0)
+  const nwDirection = nwDiff >= 0 ? '增加' : '減少'
+  const nwText = `我的淨資產${nwDirection}了 ${formatInvestNumber(Math.abs(nwDiff))} 元，較期初 ${nwPct >= 0 ? '+' : ''}${nwPct}%`
+  
+  const liabDiff = last.liabilities - first.liabilities
+  const liabPct = first.liabilities !== 0 ? Math.round((liabDiff / Math.abs(first.liabilities)) * 100) : (liabDiff !== 0 ? 100 : 0)
+  const liabDirection = liabDiff >= 0 ? '增加' : '減少'
+  const liabText = liabDiff === 0 ? '我的負債沒有改變' : `我的負債${liabDirection}了 ${formatInvestNumber(Math.abs(liabDiff))} 元，較期初 ${liabPct >= 0 ? '+' : ''}${liabPct}%`
+  
+  return { nw: nwText, liab: liabText }
+})
+
+const liquidInvestSummaryText = computed(() => {
+  const datasets = trendDatasets.value
+  if (datasets.length < 2) return { liquid: '我的流動資金沒有改變', invest: '我的投資沒有改變' }
+  
+  const first = datasets[0]
+  const last = datasets[datasets.length - 1]
+  
+  const liqDiff = last.liquid - first.liquid
+  const liqPct = first.liquid !== 0 ? Math.round((liqDiff / Math.abs(first.liquid)) * 100) : (liqDiff !== 0 ? 100 : 0)
+  const liqDirection = liqDiff >= 0 ? '增加' : '減少'
+  const liqText = liqDiff === 0 ? '我的流動資金沒有改變' : `我的流動資金${liqDirection}了 ${formatInvestNumber(Math.abs(liqDiff))} 元，較期初 ${liqPct >= 0 ? '+' : ''}${liqPct}%`
+  
+  const invDiff = last.invest - first.invest
+  const invPct = first.invest !== 0 ? Math.round((invDiff / Math.abs(first.invest)) * 100) : (invDiff !== 0 ? 100 : 0)
+  const invDirection = invDiff >= 0 ? '增加' : '減少'
+  const invText = invDiff === 0 ? '我的投資沒有改變' : `我的投資${invDirection}了 ${formatInvestNumber(Math.abs(invDiff))} 元，較期初 ${invPct >= 0 ? '+' : ''}${invPct}%`
+  
+  return { liquid: liqText, invest: invText }
+})
+
+const trendChartData = computed(() => {
+  const datasets = trendDatasets.value
+  const labels = datasets.map(r => {
+    const d = new Date(r.date)
+    return `${d.getMonth() + 1}月`
+  })
+  
+  if (trendType.value === 'net_worth') {
+    const nwData = datasets.map(r => r.netWorth)
+    const liabData = datasets.map(r => r.liabilities)
+    return {
+      labels,
+      datasets: [
+        {
+          data: nwData,
+          borderColor: '#5c67f5',
+          tension: 0.35,
+          borderWidth: 2.5,
+          fill: false,
+          pointRadius: datasets.length > 20 ? 0 : 2,
+          pointHoverRadius: 5
+        },
+        {
+          data: liabData,
+          borderColor: '#a0a0a5',
+          borderDash: [5, 5],
+          tension: 0.35,
+          borderWidth: 2.5,
+          fill: false,
+          pointRadius: datasets.length > 20 ? 0 : 2,
+          pointHoverRadius: 5
+        }
+      ]
+    }
+  } else {
+    const liquidData = datasets.map(r => r.liquid)
+    const investData = datasets.map(r => r.invest)
+    return {
+      labels,
+      datasets: [
+        {
+          data: liquidData,
+          borderColor: '#2ec173',
+          tension: 0.35,
+          borderWidth: 2.5,
+          fill: false,
+          pointRadius: datasets.length > 20 ? 0 : 2,
+          pointHoverRadius: 5
+        },
+        {
+          data: investData,
+          borderColor: '#7839ec',
+          tension: 0.35,
+          borderWidth: 2.5,
+          fill: false,
+          pointRadius: datasets.length > 20 ? 0 : 2,
+          pointHoverRadius: 5
+        }
+      ]
+    }
+  }
+})
+
+const trendChartOptions = {
+  responsive: true,
+  maintainAspectRatio: false,
+  interaction: { mode: 'index', intersect: false },
+  plugins: {
+    legend: { display: false },
+    tooltip: {
+      backgroundColor: 'rgba(30, 30, 32, 0.95)',
+      titleColor: '#ffffff',
+      bodyColor: '#e0e0e5',
+      borderColor: 'rgba(255, 255, 255, 0.08)',
+      borderWidth: 1,
+      padding: 10,
+      cornerRadius: 8
+    }
+  },
+  scales: {
+    y: {
+      grid: { color: 'rgba(255, 255, 255, 0.05)' },
+      ticks: { 
+        color: 'rgba(255, 255, 255, 0.4)', 
+        font: { size: 10, family: 'Inter' },
+        callback: (value) => {
+          if (Math.abs(value) >= 1000000) {
+            return (value / 1000000) + 'm';
+          }
+          if (Math.abs(value) >= 1000) {
+            return (value / 1000) + 'k';
+          }
+          return value;
+        }
+      }
+    },
+    x: {
+      grid: { display: false },
+      ticks: { color: 'rgba(255, 255, 255, 0.4)', font: { size: 10, family: 'Inter' }, maxTicksLimit: 8 }
+    }
+  }
+}
+
+// 圓餅圖分配資料
+const doughnutChartData = computed(() => {
+  const assets = totalLiquidAssets.value
+  const inv = totalInvestments.value
+  const fixed = totalFixedAssets.value
+  const recv = totalReceivables.value
+  const liab = totalLiabilities.value
+
+  const hasData = assets > 0 || inv > 0 || fixed > 0 || recv > 0 || liab > 0
+  if (!hasData) {
+    return {
+      labels: ['無資料'],
+      datasets: [{ backgroundColor: ['#eaeaff'], data: [1], borderWidth: 0 }]
+    }
+  }
+
+  const labels = []
+  const data = []
+  const colors = []
+
+  if (assets > 0) { labels.push('流動資金'); data.push(assets); colors.push('#5ebd74') }
+  if (inv > 0)    { labels.push('投資'); data.push(inv);    colors.push('#5c67f5') }
+  if (fixed > 0)   { labels.push('固定資產'); data.push(fixed);   colors.push('#3a59cc') }
+  if (recv > 0)   { labels.push('應收款'); data.push(recv);   colors.push('#8ba4e8') }
+  if (liab > 0)   { labels.push('負債'); data.push(liab);   colors.push('#ccd7f5') }
+
+  return {
+    labels,
+    datasets: [{
+      backgroundColor: colors,
+      data,
+      borderWidth: 2,
+      borderColor: '#f3f5f8',
+      hoverOffset: 4
+    }]
+  }
+})
+
+const doughnutChartOptions = {
+  responsive: true,
+  maintainAspectRatio: false,
+  cutout: '84%',
+  plugins: {
+    legend: { display: false }
+  }
+}
+
+// ── Functions ─────────────────────────────────────────────────────
+const togglePrivacy = () => { isHidden.value = !isHidden.value }
+
+const fetchAllData = async () => {
+  // 1. Fetch USD/TWD rate
   try {
     const res = await fetch('https://api.exchangerate-api.com/v4/latest/USD')
     const rateData = await res.json()
@@ -57,508 +896,2243 @@ const fetchFinancialData = async () => {
     usdTwdRate.value = 32
   }
 
-  // 2. 抓投資資料，依幣別換算成 TWD
-  const { data: investments } = await supabase
-    .from('investments')
-    .select('quantity, current_price, currency, asset_class, buy_price, average_cost, buy_date, created_at')
-
-  if (investments) {
-    totalInvestmentValue.value = investments.reduce((sum, item) => {
-      const qty = Number(item.quantity || 0)
-      const price = Number(item.current_price || 0)
-      const raw = qty * price
-      const currency = item.currency || (item.asset_class === 'us_stock' ? 'USD' : 'TWD')
-      return sum + (currency === 'USD' ? raw * usdTwdRate.value : raw)
-    }, 0)
-
-    // 建立每月投入金額 map（用於半年走勢圖）
-    // key: 'YYYY-M'
-    monthlyInvestMap.value = {}
-    for (const item of investments) {
-      const dateStr = item.buy_date || item.created_at?.split('T')[0]
-      if (!dateStr) continue
-      const d = new Date(dateStr)
-      const key = `${d.getFullYear()}-${d.getMonth()}`
-      const qty = Number(item.quantity || 0)
-      const buyPrice = Number(item.buy_price ?? item.average_cost ?? 0)
-      const cost = qty * buyPrice
-      const currency = item.currency || (item.asset_class === 'us_stock' ? 'USD' : 'TWD')
-      const costTwd = currency === 'USD' ? cost * usdTwdRate.value : cost
-      monthlyInvestMap.value[key] = (monthlyInvestMap.value[key] || 0) + costTwd
+  // 2. Fetch Accounts (Supabase + localStorage fallback)
+  let loadedAccounts = []
+  try {
+    const { data: accs, error: accsErr } = await supabase
+      .from('accounts')
+      .select('*')
+      .order('created_at', { ascending: true })
+    
+    if (!accsErr && accs && accs.length > 0) {
+      loadedAccounts = accs
+    } else {
+      loadedAccounts = JSON.parse(localStorage.getItem('local_accounts') || '[]')
     }
+  } catch (err) {
+    console.warn('Supabase accounts query failed, loading locally:', err)
+    loadedAccounts = JSON.parse(localStorage.getItem('local_accounts') || '[]')
   }
+  
+  // Seed mock accounts if completely empty
+  if (loadedAccounts.length === 0) {
+    loadedAccounts = [
+      { id: 'mock-acc-1', name: '媽媽的流動資金', balance: 500000, type: 'Bank', created_at: new Date().toISOString() },
+      { id: 'mock-acc-2', name: '微信錢包', balance: 74000, type: 'Cash', created_at: new Date().toISOString() },
+      { id: 'mock-acc-3', name: 'Honda Civic', balance: 320000, type: 'Car', created_at: new Date().toISOString() },
+      { id: 'mock-acc-4', name: '我的房屋', balance: 1200000, type: 'RealEstate', created_at: new Date().toISOString() },
+      { id: 'mock-acc-5', name: '借小明的還款款項', balance: 120000, type: 'Receivable', created_at: new Date().toISOString() }
+    ]
+    localStorage.setItem('local_accounts', JSON.stringify(loadedAccounts))
+  }
+  accounts.value = loadedAccounts
 
-  // 3. 抓帳戶餘額
-  const { data: accounts } = await supabase.from('accounts').select('balance')
-  if (accounts) {
-    totalAssets.value = accounts.reduce((sum, item) => sum + Number(item.balance), 0)
+  // 3. Fetch Investments (Supabase + localStorage fallback)
+  let loadedInvestments = []
+  try {
+    const { data: invs, error: invsErr } = await supabase
+      .from('investments')
+      .select('*')
+      .order('created_at', { ascending: false })
+      
+    if (!invsErr && invs && invs.length > 0) {
+      loadedInvestments = invs
+    } else {
+      loadedInvestments = JSON.parse(localStorage.getItem('local_investments') || '[]')
+    }
+  } catch (err) {
+    console.warn('Supabase investments query failed, loading locally:', err)
+    loadedInvestments = JSON.parse(localStorage.getItem('local_investments') || '[]')
   }
+  
+  // Seed mock investments if completely empty
+  if (loadedInvestments.length === 0) {
+    const nowStr = new Date().toISOString()
+    loadedInvestments = [
+      { id: 'mock-inv-1', symbol: 'MSFT', name: '微軟股票', quantity: 1000, average_cost: 300, current_price: 240, currency: 'USD', asset_class: 'Stock', created_at: nowStr, price_updated_at: nowStr },
+      { id: 'mock-inv-2', symbol: '0050', name: '基金', quantity: 2000, average_cost: 30, current_price: 30, currency: 'TWD', asset_class: 'Fund', created_at: nowStr, price_updated_at: nowStr },
+      { id: 'mock-inv-3', symbol: 'BTC', name: '加密貨幣', quantity: 1, average_cost: 22200, current_price: 22200, currency: 'USD', asset_class: 'Crypto', created_at: nowStr, price_updated_at: nowStr },
+      { id: 'mock-inv-4', symbol: 'AAPL', name: '蘋果股票', quantity: 400, average_cost: 40, current_price: 40, currency: 'USD', asset_class: 'Stock', created_at: nowStr, price_updated_at: nowStr }
+    ]
+    localStorage.setItem('local_investments', JSON.stringify(loadedInvestments))
+  }
+  investments.value = loadedInvestments
 
   isInitialDataLoaded.value = true
+
+  // 4. Process auto-record transactions
+  await processAutoRecords()
+
+  // 5. Save daily snapshot
+  await saveDailySnapshot(netWorth.value)
 }
 
-// 每月投入金額 map（key: 'YYYY-M'）
-const monthlyInvestMap = ref({})
+const saveDailySnapshot = async (amount) => {
+  const d = new Date()
+  const offset = d.getTimezoneOffset()
+  const localDate = new Date(d.getTime() - (offset * 60 * 1000))
+  const dateStr = localDate.toISOString().split('T')[0]
+  
+  try {
+    const { error } = await supabase
+      .from('net_worth_history')
+      .upsert({ date: dateStr, amount }, { onConflict: 'date' })
+    if (error) saveSnapshotToLocal(dateStr, amount)
+  } catch {
+    saveSnapshotToLocal(dateStr, amount)
+  }
+  
+  await fetchHistoricalSnapshots()
+}
 
-// 圓餅圖：帳戶資產 / 投資組合 / 現金流（收入-支出）
-const chartData = computed(() => {
-  const inv = totalInvestmentValue.value
-  const assets = totalAssets.value
-  const flow = cashBalance.value  // 收入-支出
+const saveSnapshotToLocal = (dateStr, amount) => {
+  let history = JSON.parse(localStorage.getItem('net_worth_history') || '[]')
+  const index = history.findIndex(h => h.date === dateStr)
+  if (index !== -1) history[index].amount = amount
+  else history.push({ date: dateStr, amount })
+  history.sort((a, b) => new Date(a.date) - new Date(b.date))
+  localStorage.setItem('net_worth_history', JSON.stringify(history))
+}
 
-  const hasData = inv > 0 || assets > 0 || flow !== 0
-  if (!hasData) {
-    return {
-      labels: ['無資料'],
-      datasets: [{ backgroundColor: ['#334155'], data: [1], borderWidth: 0 }]
+const fetchHistoricalSnapshots = async () => {
+  let dbRecords = []
+  try {
+    const { data, error } = await supabase
+      .from('net_worth_history')
+      .select('date, amount')
+      .order('date', { ascending: true })
+    if (!error && data) dbRecords = data
+  } catch {}
+
+  const localRecords = JSON.parse(localStorage.getItem('net_worth_history') || '[]')
+  const merged = {}
+  localRecords.forEach(r => merged[r.date] = Number(r.amount))
+  dbRecords.forEach(r => merged[r.date] = Number(r.amount))
+
+  historyRecords.value = Object.entries(merged).map(([date, amount]) => ({
+    date,
+    amount
+  })).sort((a, b) => new Date(a.date) - new Date(b.date))
+
+  // 生成模擬成長曲線
+  if (historyRecords.value.length <= 1) {
+    const today = new Date()
+    const mockData = []
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(today.getFullYear(), today.getMonth() - i, today.getDate())
+      const dateStr = d.toISOString().split('T')[0]
+      const factor = 1 - (i * 0.05)
+      mockData.push({
+        date: dateStr,
+        amount: Math.round(netWorth.value * factor)
+      })
+    }
+    historyRecords.value = mockData
+  }
+}
+
+// Yahoo Finance symbol resolver
+const getYahooSymbol = (symbol, assetClass) => {
+  if (!symbol) return ''
+  const sym = symbol.trim().toUpperCase()
+  const cls = (assetClass || '').trim().toLowerCase()
+  
+  // If it already has a suffix like .TW, .TWO, -USD, =X, return as is
+  if (sym.endsWith('.TW') || sym.endsWith('.TWO') || sym.includes('-') || sym.includes('=')) {
+    return sym
+  }
+  
+  // Taiwan stock: 4-6 digit numeric code or tw_stock class
+  if (cls === 'tw_stock' || /^\d{4,6}$/.test(sym)) {
+    return `${sym}.TW`
+  }
+  
+  // Crypto: BTC, ETH, etc. -> BTC-USD
+  if (cls === 'crypto' || ['BTC', 'ETH', 'SOL', 'USDT', 'USDC', 'DOGE', 'BNB'].includes(sym)) {
+    return `${sym}-USD`
+  }
+  
+  // Default to symbol as is (for US stocks)
+  return sym
+}
+
+// Yahoo Finance price updating logic
+const fetchYahooPrice = async (symbol) => {
+  try {
+    const isProd = import.meta.env.PROD
+    const yhUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=1d`
+    const url = isProd 
+      ? `https://api.allorigins.win/raw?url=${encodeURIComponent(yhUrl)}` 
+      : `/yahoo-finance/v8/finance/chart/${symbol}?interval=1d&range=1d`
+      
+    const res = await fetch(url)
+    if (!res.ok) return null
+    const data = await res.json()
+    return data?.chart?.result?.[0]?.meta?.regularMarketPrice ?? null
+  } catch {
+    return null
+  }
+}
+
+const refreshPrices = async () => {
+  if (isRefreshing.value) return
+  isRefreshing.value = true
+  
+  let count = 0
+  const symbolMap = {}
+  investments.value.forEach(inv => {
+    const key = inv.symbol.toUpperCase()
+    if (!symbolMap[key]) symbolMap[key] = { cls: inv.asset_class, ids: [] }
+    symbolMap[key].ids.push(inv.id)
+  })
+
+  for (const [sym, info] of Object.entries(symbolMap)) {
+    const querySym = getYahooSymbol(sym, info.cls)
+    const price = await fetchYahooPrice(querySym)
+    if (price !== null) {
+      const now = new Date().toISOString()
+      for (const id of info.ids) {
+        try {
+          await supabase
+            .from('investments')
+            .update({ current_price: price, price_updated_at: now })
+            .eq('id', id)
+        } catch {}
+        
+        const item = investments.value.find(i => i.id === id)
+        if (item) { item.current_price = price; item.price_updated_at = now }
+      }
+      count++
     }
   }
+  
+  localStorage.setItem('local_investments', JSON.stringify(investments.value))
+  isRefreshing.value = false
+  await saveDailySnapshot(netWorth.value)
+}
 
-  const labels = []
-  const data = []
-  const colors = []
+// ── Accordion Handlers for Modal ──────────────────────────────────
+const toggleAccordion = (category) => {
+  expandedCategories.value[category] = !expandedCategories.value[category]
+}
 
-  if (assets > 0) { labels.push('帳戶資產'); data.push(assets); colors.push('#3b82f6') }
-  if (inv > 0)    { labels.push('投資組合'); data.push(inv);    colors.push('#8b5cf6') }
-  if (flow > 0)   { labels.push('現金流'); data.push(flow);   colors.push('#10b981') }
-  // 支出超過收入時顯示貕字
-  if (flow < 0)   { labels.push('收支赤字'); data.push(Math.abs(flow)); colors.push('#ef4444') }
+const selectSubtype = (category, subType, label) => {
+  newAsset.value.category = category
+  newAsset.value.type = subType
+  newAsset.value.name = ''
+  newAsset.value.balance = ''
+  newAsset.value.symbol = ''
+  newAsset.value.quantity = ''
+  newAsset.value.buy_price = ''
+  newAsset.value.buy_date = new Date().toISOString().split('T')[0]
+  newAsset.value.custom_group = ''
+  
+  addModalStep.value = 2 // Move to form input step
+}
 
-  return {
-    labels,
-    datasets: [{
-      backgroundColor: colors,
-      data,
-      borderWidth: 0,
-      hoverOffset: 4
-    }]
+const getCategoryName = (cat) => {
+  switch(cat) {
+    case 'liquid': return '流動資金'
+    case 'invest': return '投資'
+    case 'fixed': return '固定資產'
+    case 'receivable': return '應收款'
+    case 'liab': return '負債'
+    default: return ''
   }
-})
+}
 
-const chartOptions = {
-  responsive: true,
-  maintainAspectRatio: false,
-  cutout: '65%',
-  plugins: {
-    legend: {
-      display: true,
-      position: 'right',
-      labels: {
-        color: '#9ca3af',
-        usePointStyle: true,
-        pointStyleWidth: 8,
-        font: { size: 10 },
-        padding: 8,
-        boxWidth: 8
+const getSubtypePlaceholder = (subType) => {
+  switch (subType) {
+    case 'Bank': return '例: 國泰世華、玉山銀行'
+    case 'Cash': return '例: 手頭現金、緊急預備金'
+    case 'E-Wallet': return '例: LINE Pay、微信錢包、支付寶'
+    case 'OtherLiquid': return '例: 悠遊卡餘額、其他流動款項'
+    case 'Fund': return '例: 元大美債20年、野村基金'
+    case 'Stock': return '例: 台積電、特斯拉、微軟股票'
+    case 'Crypto': return '例: 比特幣 BTC、乙太幣 ETH'
+    case 'Metal': return '例: 黃金存摺、白銀'
+    case 'OtherInvest': return '例: 實體收藏品、藝術品投資'
+    case 'RealEstate': return '例: 台北大安房產、我的公寓'
+    case 'Car': return '例: Honda Civic、我的汽車'
+    case 'OtherFixed': return '例: 勞力士手錶、貴重樂器'
+    case 'Receivable': return '例: 借小明的借款、應收專案款'
+    case 'Credit Card': return '例: 富邦信用卡、台新信用卡'
+    case 'Loan': return '例: 就學貸款、汽車貸款、房屋貸款'
+    case 'Payable': return '例: 應付房租、分期付款'
+    case 'OtherLiab': return '例: 其他借款、私人欠款'
+    default: return '項目名稱'
+  }
+}
+
+const addAssetItem = async () => {
+  saveError.value = ''
+  isSaving.value = true
+  
+  try {
+    const generatedId = 'local-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9)
+    const nowStr = new Date().toISOString()
+    
+    // 如果是投資類別，且需要以股票/標的模式記錄
+    const isLotInvestment = ['Stock', 'Crypto', 'Fund'].includes(newAsset.value.type)
+    
+    if (newAsset.value.category === 'invest' && isLotInvestment) {
+      if (!newAsset.value.symbol) {
+        saveError.value = '請填寫股票/標的代號'
+        isSaving.value = false
+        return
       }
-    },
-    tooltip: {
-      callbacks: {
-        label: (ctx) => ` ${ctx.label}: ${formatCurrency(ctx.parsed)}`
+      const qty = Number(newAsset.value.quantity || 0)
+      const buyPrice = Number(newAsset.value.buy_price || 0)
+      
+      const payload = {
+        id: isEditing.value ? editingId.value : generatedId,
+        asset_class: newAsset.value.type, // Stock, Crypto, Fund
+        symbol: newAsset.value.symbol.toUpperCase(),
+        name: newAsset.value.name || newAsset.value.symbol.toUpperCase(),
+        quantity: qty,
+        average_cost: buyPrice,
+        currency: newAsset.value.type === 'Stock' || newAsset.value.type === 'Crypto'
+          ? (isTaiwanStock(newAsset.value.symbol) ? 'TWD' : 'USD')
+          : 'TWD',
+        type: 'Stock',
+        current_price: buyPrice,
+        buy_price: buyPrice,
+        buy_date: newAsset.value.buy_date,
+        created_at: isEditing.value ? (investments.value.find(i => i.id === editingId.value)?.created_at || nowStr) : nowStr,
+        price_updated_at: nowStr,
+        custom_group: newAsset.value.custom_group || '',
+        funding_account_id: newAsset.value.funding_account_id || null
       }
+      
+      // Calculate cash funding account adjustment
+      const oldInv = isEditing.value ? investments.value.find(i => i.id === editingId.value) : null
+      const oldCost = oldInv ? (Number(oldInv.quantity || 0) * Number(oldInv.buy_price || oldInv.average_cost || 0)) : 0
+      const oldCostTwd = oldInv && oldInv.currency === 'USD' ? oldCost * usdTwdRate.value : oldCost
+      
+      const newCost = payload.quantity * payload.buy_price
+      const newCostTwd = payload.currency === 'USD' ? newCost * usdTwdRate.value : newCost
+      
+      const oldFundingId = oldInv ? oldInv.funding_account_id : null
+      const newFundingId = payload.funding_account_id
+      
+      let accountsChanged = false
+      const updatedAccounts = [...accounts.value]
+      
+      if (oldFundingId === newFundingId) {
+        if (newFundingId) {
+          const acc = updatedAccounts.find(a => a.id === newFundingId)
+          if (acc) {
+            const diffTwd = newCostTwd - oldCostTwd
+            acc.balance -= diffTwd
+            if (acc.balance < 0) acc.balance = 0
+            acc._dirty = true
+            accountsChanged = true
+          }
+        }
+      } else {
+        if (oldFundingId) {
+          const oldAcc = updatedAccounts.find(a => a.id === oldFundingId)
+          if (oldAcc) {
+            oldAcc.balance += oldCostTwd
+            oldAcc._dirty = true
+            accountsChanged = true
+          }
+        }
+        if (newFundingId) {
+          const newAcc = updatedAccounts.find(a => a.id === newFundingId)
+          if (newAcc) {
+            newAcc.balance -= newCostTwd
+            if (newAcc.balance < 0) newAcc.balance = 0
+            newAcc._dirty = true
+            accountsChanged = true
+          }
+        }
+      }
+      
+      if (isEditing.value) {
+        try {
+          await supabase.from('investments').update({
+            symbol: payload.symbol,
+            name: payload.name,
+            quantity: payload.quantity,
+            average_cost: payload.average_cost,
+            buy_price: payload.buy_price,
+            buy_date: payload.buy_date,
+            custom_group: payload.custom_group,
+            funding_account_id: payload.funding_account_id
+          }).eq('id', editingId.value)
+        } catch (dbErr) {
+          console.warn('Supabase DB offline, updating locally only:', dbErr)
+        }
+        const idx = investments.value.findIndex(i => i.id === editingId.value)
+        if (idx !== -1) {
+          investments.value[idx] = { ...investments.value[idx], ...payload }
+        }
+      } else {
+        try {
+          const { data, error } = await supabase.from('investments').insert([payload]).select()
+          if (!error && data) payload.id = data[0].id
+        } catch (dbErr) {
+          console.warn('Supabase DB offline, storing locally only:', dbErr)
+        }
+        investments.value.unshift(payload)
+      }
+      localStorage.setItem('local_investments', JSON.stringify(investments.value))
+      
+      // Save accounts changes if any funding occurred
+      if (accountsChanged) {
+        accounts.value = updatedAccounts
+        const cleanAccounts = updatedAccounts.map(a => {
+          const copy = { ...a }
+          delete copy._dirty
+          return copy
+        })
+        localStorage.setItem('local_accounts', JSON.stringify(cleanAccounts))
+        
+        for (const acc of updatedAccounts) {
+          if (acc._dirty) {
+            delete acc._dirty
+            try {
+              await supabase.from('accounts').update({ balance: acc.balance }).eq('id', acc.id)
+            } catch (err) {
+              console.warn('Sync account balance after investment funding failed:', err)
+            }
+          }
+        }
+      }
+      
+      // Async price fetch
+      const querySym = getYahooSymbol(payload.symbol, payload.asset_class)
+      fetchYahooPrice(querySym).then(async (price) => {
+        if (price !== null) {
+          const targetId = isEditing.value ? editingId.value : payload.id
+          try {
+            await supabase
+              .from('investments')
+              .update({ current_price: price, price_updated_at: new Date().toISOString() })
+              .eq('id', targetId)
+          } catch {}
+          const item = investments.value.find(i => i.id === targetId)
+          if (item) {
+            item.current_price = price
+            item.price_updated_at = new Date().toISOString()
+            localStorage.setItem('local_investments', JSON.stringify(investments.value))
+          }
+        }
+      })
+    } else {
+      // 流動資金、固定資產、應收款、負債，以及其他非標的類的投資 (Metal, OtherInvest 等)
+      if (!newAsset.value.name || newAsset.value.balance === undefined || newAsset.value.balance === '') {
+        saveError.value = '請填寫名稱與金額'
+        isSaving.value = false
+        return
+      }
+      
+      const payload = {
+        id: isEditing.value ? editingId.value : generatedId,
+        name: newAsset.value.name,
+        type: newAsset.value.type,
+        balance: Math.abs(Number(newAsset.value.balance)),
+        include_in_chart: newAsset.value.include_in_chart ?? true,
+        remarks: newAsset.value.remarks ?? '',
+        auto_record: newAsset.value.auto_record ? JSON.parse(JSON.stringify(newAsset.value.auto_record)) : null,
+        created_at: isEditing.value ? (accounts.value.find(a => a.id === editingId.value)?.created_at || nowStr) : nowStr,
+        custom_group: newAsset.value.custom_group || ''
+      }
+      
+      const dbPayload = {
+        name: payload.name,
+        type: payload.type,
+        balance: payload.balance,
+        custom_group: payload.custom_group
+      }
+      
+      if (isEditing.value) {
+        try {
+          await supabase.from('accounts').update(dbPayload).eq('id', editingId.value)
+        } catch (dbErr) {
+          console.warn('Supabase DB offline, updating locally only:', dbErr)
+        }
+        const idx = accounts.value.findIndex(a => a.id === editingId.value)
+        if (idx !== -1) {
+          accounts.value[idx] = payload
+        }
+      } else {
+        try {
+          const { data, error } = await supabase.from('accounts').insert([dbPayload]).select()
+          if (!error && data) payload.id = data[0].id
+        } catch (dbErr) {
+          console.warn('Supabase DB offline, storing locally only:', dbErr)
+        }
+        accounts.value.push(payload)
+      }
+      localStorage.setItem('local_accounts', JSON.stringify(accounts.value))
+    }
+
+    showAddModal.value = false
+    addModalStep.value = 1 // Reset step
+    isEditing.value = false
+    editingId.value = null
+    expandedCategories.value = {
+      liquid: true,
+      invest: false,
+      fixed: false,
+      receivable: false,
+      liab: false
+    }
+    
+    await saveDailySnapshot(netWorth.value)
+  } catch (err) {
+    console.error(err)
+    saveError.value = `儲存失敗：${err.message}`
+  } finally {
+    isSaving.value = false
+  }
+}
+
+// ── CRUD Deletions ────────────────────────────────────────────────
+const deleteAccount = async (id) => {
+  if (!confirm('確定要刪除此資產項目？')) return
+  
+  try {
+    await supabase.from('accounts').delete().eq('id', id)
+  } catch (e) {
+    console.warn('Supabase delete account failed, deleting locally:', e)
+  }
+  
+  accounts.value = accounts.value.filter(a => a.id !== id)
+  localStorage.setItem('local_accounts', JSON.stringify(accounts.value))
+  await saveDailySnapshot(netWorth.value)
+}
+
+const deleteInvestment = async (id) => {
+  if (!confirm('確定要刪除此投資項目？')) return
+  
+  const inv = investments.value.find(i => i.id === id)
+  
+  try {
+    await supabase.from('investments').delete().eq('id', id)
+  } catch (e) {
+    console.warn('Supabase delete investment failed, deleting locally:', e)
+  }
+  
+  // Refund linked funding account
+  if (inv && inv.funding_account_id) {
+    const cost = Number(inv.quantity || 0) * Number(inv.buy_price || inv.average_cost || 0)
+    const costTwd = inv.currency === 'USD' ? cost * usdTwdRate.value : cost
+    
+    accounts.value = accounts.value.map(acc => {
+      if (acc.id === inv.funding_account_id) {
+        acc.balance += costTwd
+        try {
+          supabase.from('accounts').update({ balance: acc.balance }).eq('id', acc.id)
+        } catch (dbErr) {
+          console.warn('Refund funding account failed:', dbErr)
+        }
+      }
+      return acc
+    })
+    localStorage.setItem('local_accounts', JSON.stringify(accounts.value))
+  }
+  
+  investments.value = investments.value.filter(i => i.id !== id)
+  localStorage.setItem('local_investments', JSON.stringify(investments.value))
+  await saveDailySnapshot(netWorth.value)
+}
+
+const handleDeleteFromEdit = async () => {
+  if (!isEditing.value || !editingId.value) return
+  
+  if (newAsset.value.category === 'invest') {
+    await deleteInvestment(editingId.value)
+    const exists = investments.value.some(i => i.id === editingId.value)
+    if (!exists) {
+      closeAddModal()
+    }
+  } else {
+    await deleteAccount(editingId.value)
+    const exists = accounts.value.some(a => a.id === editingId.value)
+    if (!exists) {
+      closeAddModal()
     }
   }
 }
 
-// Filtered Transactions Logic
-
-
+// ── Helpers ───────────────────────────────────────────────────────
 const formatCurrency = (amount) => {
-  return new Intl.NumberFormat('zh-TW', {
+  return new Intl.NumberFormat('zh-TW', { style: 'currency', currency: 'TWD', minimumFractionDigits: 0 }).format(amount)
+}
+const formatPrice = (price, currency) => {
+  return currency === 'USD' 
+    ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(price)
+    : formatCurrency(price)
+}
+const formatDate = (dateStr) => {
+  if (!dateStr) return ''
+  const d = new Date(dateStr)
+  return `${d.getMonth() + 1}月${d.getDate()}日`
+}
+const getTodayStr = () => {
+  const d = new Date()
+  return `${d.getMonth() + 1}月${d.getDate()}日 更新`
+}
+
+const isTaiwanStock = (symbol) => {
+  if (!symbol) return false
+  const sym = symbol.trim().toUpperCase()
+  return sym.endsWith('.TW') || /^\d{4,5}$/.test(sym)
+}
+
+const formatInvestCurrency = (amount, currency = 'TWD') => {
+  const formatted = new Intl.NumberFormat('en-US', {
     style: 'currency',
-    currency: 'TWD',
-    minimumFractionDigits: 0
+    currency: currency,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(amount)
+  return formatted.replace(/^[A-Z$]+/, (match) => match + ' ')
+}
+
+const formatHistoryValue = (amount, currency = 'TWD') => {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: currency,
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0
   }).format(amount)
 }
 
-// --- Consumption Analysis (Category Breakdown) ---
-const categoryColors = {
-  'Food': '#fbbf24',
-  'Transport': '#60a5fa',
-  'Utilities': '#f87171',
-  'Entertainment': '#a78bfa',
-  'Health': '#34d399',
-  'Shopping': '#ec4899',
-  'Other': '#9ca3af',
-  'Salary': '#34d399',
-  'Bonus': '#fbbf24',
-  'Investment': '#60a5fa',
-  'Gift': '#ec4899',
-  'Subscription': '#818cf8'
+const formatDateDetailed = (dateStr) => {
+  if (!dateStr) return ''
+  const d = new Date(dateStr)
+  const hour = d.getHours()
+  const min = d.getMinutes().toString().padStart(2, '0')
+  const ampm = hour >= 12 ? '下午' : '上午'
+  const displayHour = hour % 12 || 12
+  return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} ${ampm} ${displayHour}:${min}`
 }
 
-const categoryLabels = {
-  'Food': '餐飲',
-  'Transport': '交通',
-  'Utilities': '水電',
-  'Entertainment': '娛樂',
-  'Health': '醫療',
-  'Shopping': '購物',
-  'Other': '其他',
-  'Salary': '薪資',
-  'Bonus': '獎金',
-  'Investment': '投資',
-  'Gift': '禮金',
-  'Subscription': '訂閱'
+const formatInvestNumber = (num) => {
+  if (num === undefined || num === null) return '0'
+  return new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(num)
 }
 
-const consumptionChartData = computed(() => {
-  const currentMonthExpenses = props.expenses.filter(e => {
-    const d = new Date(e.date)
-    const now = new Date()
-    return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear()
-  })
-
-  const categoryTotals = {}
-  currentMonthExpenses.forEach(exp => {
-    const cat = exp.category || 'Other'
-    categoryTotals[cat] = (categoryTotals[cat] || 0) + Number(exp.amount)
-  })
-
-  const labels = Object.keys(categoryTotals).map(cat => categoryLabels[cat] || cat)
-  const data = Object.values(categoryTotals)
-  const backgroundColors = Object.keys(categoryTotals).map(cat => categoryColors[cat] || categoryColors['Other'])
-
-  if (labels.length === 0) {
-     return {
-        labels: ['無資料'],
-        datasets: [{ data: [1], backgroundColor: ['#334155'] }] // Placeholder
-     }
+const translateTypeSettings = (type) => {
+  switch (type) {
+    case 'Bank': return '銀行帳戶'
+    case 'Cash': return '現金'
+    case 'E-Wallet': return '電子錢包'
+    case 'OtherLiquid': return '其他流動資金'
+    case 'RealEstate': return '房產'
+    case 'Car': return '汽車'
+    case 'OtherFixed': return '其他固定資產'
+    case 'Receivable': return '應收款項'
+    case 'Credit Card': return '信用卡帳單'
+    case 'Loan': return '貸款債務'
+    case 'Payable': return '應付款項'
+    case 'OtherLiab': return '其他負債'
+    // Investments
+    case 'Fund': return '投資基金'
+    case 'Stock': return '股票'
+    case 'Crypto': return '加密貨幣'
+    case 'Metal': return '貴金屬'
+    case 'OtherInvest': return '其他投資'
+    default: return type
   }
+}
 
-  return {
-    labels,
-    datasets: [{
-      backgroundColor: backgroundColors,
-      data,
-      borderWidth: 0,
-      hoverOffset: 4
-    }]
+const getCategoryThemeColor = (category) => {
+  switch (category) {
+    case 'liquid': return '#2ebd59'
+    case 'invest': return '#5c67f5'
+    case 'fixed': return '#3a59cc'
+    case 'receivable': return '#8ba4e8'
+    case 'liab': return '#ccd7f5'
+    default: return '#5c67f5'
+  }
+}
+
+const getCategoryBtnTextColor = (category) => {
+  if (['receivable', 'liab'].includes(category)) return '#121212'
+  return '#ffffff'
+}
+
+const getTypeIconAndColor = (type) => {
+  switch (type) {
+    case 'Bank': return { icon: PhCreditCard, color: 'text-green' }
+    case 'Cash': return { icon: PhWallet, color: 'text-green' }
+    case 'E-Wallet': return { icon: PhCloudArrowUp, color: 'text-green' }
+    case 'OtherLiquid': return { icon: PhCards, color: 'text-green' }
+    case 'Fund': return { icon: PhCurrencyCny, color: 'text-purple' }
+    case 'Stock': return { icon: PhChartBar, color: 'text-purple' }
+    case 'Crypto': return { icon: PhCurrencyBtc, color: 'text-purple' }
+    case 'Metal': return { icon: PhCube, color: 'text-purple' }
+    case 'OtherInvest': return { icon: PhLeaf, color: 'text-purple' }
+    case 'RealEstate': return { icon: PhBuildings, color: 'text-blue' }
+    case 'Car': return { icon: PhCar, color: 'text-blue' }
+    case 'OtherFixed': return { icon: PhLock, color: 'text-blue' }
+    case 'Receivable': return { icon: PhUsers, color: 'text-light-blue' }
+    case 'Credit Card': return { icon: PhCreditCard, color: 'text-gray-blue' }
+    case 'Loan': return { icon: PhBank, color: 'text-gray-blue' }
+    case 'Payable': return { icon: PhCreditCard, color: 'text-gray-blue' }
+    case 'OtherLiab': return { icon: PhCreditCard, color: 'text-gray-blue' }
+    default: return { icon: PhWallet, color: 'text-green' }
+  }
+}
+
+const openSubList = (type) => {
+  subListType.value = type
+  addModalStep.value = 1.5
+}
+
+const closeAddModal = () => {
+  showAddModal.value = false
+  addModalStep.value = 1
+  isEditing.value = false
+  editingId.value = null
+}
+
+const selectProvider = (item) => {
+  if (subListType.value === 'E-Wallet') newAsset.value.category = 'liquid'
+  else if (subListType.value === 'Stock') newAsset.value.category = 'invest'
+  else if (subListType.value === 'OtherInvest') newAsset.value.category = 'invest'
+  else if (subListType.value === 'Loan') newAsset.value.category = 'liab'
+
+  newAsset.value.type = item.type
+  newAsset.value.name = item.label
+  newAsset.value.balance = ''
+  newAsset.value.symbol = ''
+  newAsset.value.quantity = ''
+  newAsset.value.buy_price = ''
+  newAsset.value.buy_date = new Date().toISOString().split('T')[0]
+  newAsset.value.custom_group = ''
+  newAsset.value.funding_account_id = null
+  
+  newAsset.value.include_in_chart = true
+  newAsset.value.remarks = ''
+  newAsset.value.auto_record = null
+
+  addModalStep.value = 2
+}
+
+const subListTitle = computed(() => {
+  switch (subListType.value) {
+    case 'E-Wallet': return '電子錢包'
+    case 'Stock': return '股票'
+    case 'OtherInvest': return '其他投資'
+    case 'Loan': return '貸款'
+    default: return ''
   }
 })
 
-const consumptionChartOptions = {
-  responsive: true,
-  maintainAspectRatio: false,
-  cutout: '70%',
-  plugins: {
-    legend: {
-      position: 'right',
-      labels: {
-        color: '#9ca3af',
-        font: { size: 12 },
-        usePointStyle: true,
-        padding: 15
+const subListOptions = computed(() => {
+  switch (subListType.value) {
+    case 'E-Wallet':
+      return [
+        { label: 'LINE Pay', type: 'E-Wallet', icon: PhWallet, colorClass: 'text-green' },
+        { label: 'Apple Pay', type: 'E-Wallet', icon: PhAppleLogo, colorClass: 'text-green' },
+        { label: '街口支付', type: 'E-Wallet', icon: PhWallet, colorClass: 'text-green' },
+        { label: '微信錢包', type: 'E-Wallet', icon: PhWechatLogo, colorClass: 'text-green' },
+        { label: '支付寶', type: 'E-Wallet', icon: PhQrCode, colorClass: 'text-green' },
+        { label: '眾安銀行', type: 'E-Wallet', icon: PhBank, colorClass: 'text-green' },
+        { label: 'Paypal', type: 'E-Wallet', icon: PhCreditCard, colorClass: 'text-green' },
+        { label: '其他電子錢包', type: 'E-Wallet', icon: PhCards, colorClass: 'text-green' }
+      ]
+    case 'Stock':
+      return [
+        { label: '美股', type: 'Stock', icon: PhChartBar, colorClass: 'text-purple' },
+        { label: '台股', type: 'Stock', icon: PhChartBar, colorClass: 'text-purple' },
+        { label: '港股', type: 'Stock', icon: PhChartBar, colorClass: 'text-purple' },
+        { label: '其他股票', type: 'Stock', icon: PhChartBar, colorClass: 'text-purple' }
+      ]
+    case 'OtherInvest':
+      return [
+        { label: '實體收藏品', type: 'OtherInvest', icon: PhLeaf, colorClass: 'text-purple' },
+        { label: '藝術品', type: 'OtherInvest', icon: PhLeaf, colorClass: 'text-purple' },
+        { label: '其他', type: 'OtherInvest', icon: PhLeaf, colorClass: 'text-purple' }
+      ]
+    case 'Loan':
+      return [
+        { label: '房屋貸款', type: 'Loan', icon: PhBank, colorClass: 'text-gray-blue' },
+        { label: '汽車貸款', type: 'Loan', icon: PhCar, colorClass: 'text-gray-blue' },
+        { label: '就學貸款', type: 'Loan', icon: PhBookOpen, colorClass: 'text-gray-blue' },
+        { label: '個人信用貸款', type: 'Loan', icon: PhUser, colorClass: 'text-gray-blue' },
+        { label: '其他貸款', type: 'Loan', icon: PhBank, colorClass: 'text-gray-blue' }
+      ]
+    default:
+      return []
+  }
+})
+
+const processAutoRecords = async () => {
+  const today = new Date()
+  const currentYear = today.getFullYear()
+  const currentMonth = today.getMonth()
+  const currentDay = today.getDate()
+  
+  let changed = false
+  const updatedAccounts = [...accounts.value]
+  
+  for (let i = 0; i < updatedAccounts.length; i++) {
+    const acc = updatedAccounts[i]
+    if (acc.auto_record && acc.auto_record.enabled) {
+      const ar = acc.auto_record
+      const day = Number(ar.day || 1)
+      
+      let lastProcessedYear = 0
+      let lastProcessedMonth = -1
+      
+      if (ar.last_processed_date) {
+        const lpd = new Date(ar.last_processed_date)
+        lastProcessedYear = lpd.getFullYear()
+        lastProcessedMonth = lpd.getMonth()
       }
-    },
-    tooltip: {
-      callbacks: {
-        label: function(context) {
-          let label = context.label || '';
-          if (label) { label += ': '; }
-          if (context.parsed !== null) { label += formatCurrency(context.parsed); }
-          return label;
+      
+      const isCurrentMonthProcessed = (lastProcessedYear === currentYear && lastProcessedMonth === currentMonth)
+      
+      if (currentDay >= day && !isCurrentMonthProcessed) {
+        const amount = Number(ar.amount || 0)
+        const type = ar.type
+        
+        if (type === 'income') {
+          acc.balance += amount
+          showToast(`自動記帳：${acc.name} 固定收入 TWD ${amount}`)
+        } else if (type === 'expense') {
+          acc.balance -= amount
+          if (acc.balance < 0) acc.balance = 0
+          showToast(`自動記帳：${acc.name} 固定支出 TWD ${amount}`)
+        } else if (type === 'transfer') {
+          const targetAcc = updatedAccounts.find(a => a.id === ar.target_account_id)
+          if (targetAcc) {
+            acc.balance -= amount
+            if (acc.balance < 0) acc.balance = 0
+            targetAcc.balance += amount
+            targetAcc._dirty = true
+            showToast(`自動轉帳：從 ${acc.name} 轉帳至 ${targetAcc.name} TWD ${amount}`)
+          } else {
+            console.warn(`Target account ${ar.target_account_id} not found for transfer`)
+          }
+        }
+        
+        ar.last_processed_date = today.toISOString()
+        acc._dirty = true
+        changed = true
+      }
+    }
+  }
+  
+  if (changed) {
+    const cleanAccounts = updatedAccounts.map(a => {
+      const copy = { ...a }
+      delete copy._dirty
+      return copy
+    })
+    accounts.value = updatedAccounts
+    localStorage.setItem('local_accounts', JSON.stringify(cleanAccounts))
+    await saveDailySnapshot(netWorth.value)
+    
+    // Sync dirty accounts back to Supabase
+    for (const acc of updatedAccounts) {
+      if (acc._dirty) {
+        delete acc._dirty
+        try {
+          await supabase.from('accounts').update({ balance: acc.balance, auto_record: acc.auto_record }).eq('id', acc.id)
+        } catch (err) {
+          console.warn('Sync auto-record balance failed:', err)
         }
       }
     }
   }
 }
-
-// --- Trend Analysis (Month over Month) ---
-const trendData = computed(() => {
-  const now = new Date()
-  const thisMonth = now.getMonth()
-  const thisYear = now.getFullYear()
-  
-  // Handle January wrap-around
-  const lastMonth = thisMonth === 0 ? 11 : thisMonth - 1
-  const lastMonthYear = thisMonth === 0 ? thisYear - 1 : thisYear
-
-  let thisMonthInc = 0, thisMonthExp = 0
-  let lastMonthInc = 0, lastMonthExp = 0
-
-  props.incomes.forEach(i => {
-    const d = new Date(i.date)
-    if (d.getMonth() === thisMonth && d.getFullYear() === thisYear) thisMonthInc += Number(i.amount)
-    if (d.getMonth() === lastMonth && d.getFullYear() === lastMonthYear) lastMonthInc += Number(i.amount)
-  })
-
-  props.expenses.forEach(e => {
-    const d = new Date(e.date)
-    if (d.getMonth() === thisMonth && d.getFullYear() === thisYear) thisMonthExp += Number(e.amount)
-    if (d.getMonth() === lastMonth && d.getFullYear() === lastMonthYear) lastMonthExp += Number(e.amount)
-  })
-
-  const incGrowth = lastMonthInc === 0 ? 100 : ((thisMonthInc - lastMonthInc) / lastMonthInc) * 100
-  const expGrowth = lastMonthExp === 0 ? 100 : ((thisMonthExp - lastMonthExp) / lastMonthExp) * 100
-  
-  const thisMonthNet = thisMonthInc - thisMonthExp
-  const lastMonthNet = lastMonthInc - lastMonthExp
-  // Absolute difference for net worth
-  const netDiff = thisMonthNet - lastMonthNet
-
-  return {
-    thisMonthInc, thisMonthExp, thisMonthNet,
-    lastMonthInc, lastMonthExp, lastMonthNet,
-    incGrowth: isFinite(incGrowth) ? Number(incGrowth.toFixed(1)) : 0,
-    expGrowth: isFinite(expGrowth) ? Number(expGrowth.toFixed(1)) : 0,
-    netDiff
-  }
-})
-
-// --- 6-Month Historical Trend Chart ---
-const monthlyTrendData = computed(() => {
-  const months = []
-  const incomeData = []
-  const expenseData = []
-  const investData = []
-
-  const now = new Date()
-
-  for (let i = 5; i >= 0; i--) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
-    const monthLabel = `${d.getMonth() + 1}月`
-    months.push(monthLabel)
-
-    const mInc = props.incomes.filter(inc => {
-      const incDate = new Date(inc.date)
-      return incDate.getMonth() === d.getMonth() && incDate.getFullYear() === d.getFullYear()
-    }).reduce((sum, item) => sum + Number(item.amount), 0)
-
-    const mExp = props.expenses.filter(exp => {
-      const expDate = new Date(exp.date)
-      return expDate.getMonth() === d.getMonth() && expDate.getFullYear() === d.getFullYear()
-    }).reduce((sum, item) => sum + Number(item.amount), 0)
-
-    // 投資：从 monthlyInvestMap 取該月投入資金
-    const key = `${d.getFullYear()}-${d.getMonth()}`
-    const mInvest = monthlyInvestMap.value[key] || 0
-
-    incomeData.push(mInc)
-    expenseData.push(mExp)
-    investData.push(mInvest)
-  }
-
-  return {
-    labels: months,
-    datasets: [
-      {
-        label: '收入',
-        data: incomeData,
-        borderColor: '#10b981',
-        backgroundColor: 'rgba(16, 185, 129, 0.1)',
-        tension: 0.4,
-        borderWidth: 2,
-        pointRadius: 3
-      },
-      {
-        label: '支出',
-        data: expenseData,
-        borderColor: '#ef4444',
-        backgroundColor: 'rgba(239, 68, 68, 0.1)',
-        tension: 0.4,
-        borderWidth: 2,
-        pointRadius: 3
-      },
-      {
-        label: '投入投資',
-        data: investData,
-        borderColor: '#8b5cf6',
-        backgroundColor: 'rgba(139, 92, 246, 0.1)',
-        tension: 0.4,
-        borderWidth: 2,
-        pointRadius: 3
-      }
-    ]
-  }
-})
-
-const trendChartOptions = {
-  responsive: true,
-  maintainAspectRatio: false,
-  interaction: {
-    mode: 'index',
-    intersect: false,
-  },
-  plugins: {
-    legend: {
-      position: 'top',
-      labels: {
-        color: '#9ca3af',
-        usePointStyle: true,
-        boxWidth: 8
-      }
-    },
-    tooltip: {
-      callbacks: {
-        label: function(context) {
-          return `${context.dataset.label}: ${formatCurrency(context.parsed.y)}`
-        }
-      }
-    }
-  },
-  scales: {
-    y: {
-      display: false, // Hide Y axis labels for cleaner look
-      beginAtZero: true
-    },
-    x: {
-      grid: {
-        color: 'rgba(255,255,255,0.05)',
-        drawBorder: false
-      },
-      ticks: {
-        color: '#9ca3af' // Muted text color
-      }
-    }
-  }
-}
-
-
 
 onMounted(() => {
-  fetchFinancialData()
+  fetchAllData()
 })
 
 onActivated(() => {
-  fetchFinancialData()
+  fetchAllData()
 })
 </script>
 
 <template>
-  <div class="dashboard-container" v-if="isInitialDataLoaded">
-    <!-- Header Section -->
-    <div class="dashboard-header">
-      <div class="summary-card card-gradient">
-        <div class="summary-header">
-           <div class="net-worth-compact">
-            <div style="display: flex; align-items: center; gap: 0.5rem;">
-              <span class="label">總資產</span>
-              <button @click="togglePrivacy" class="privacy-btn">
-                <component :is="isHidden ? PhEyeSlash : PhEye" size="16" />
+  <div class="dashboard-container" v-if="isInitialDataLoaded" :style="{ backgroundColor: isTreeView ? '#121214' : 'var(--color-bg)' }">
+    
+    <!-- Toast Notification -->
+    <div v-if="toastMessage" class="app-toast">
+      <PhCheckCircle size="20" weight="bold" style="color: #2ebd59;" />
+      <span>{{ toastMessage }}</span>
+    </div>
+
+    <!-- ── 1. 資產清單視圖 (List Tab) ────────────────────────────────── -->
+    <div v-if="currentTab === 'list'" class="tab-view-content" :style="{ backgroundColor: isTreeView ? '#121214' : 'var(--color-bg)', padding: isTreeView ? '1.5rem 1.25rem' : '1.5rem 1.25rem 120px 1.25rem' }">
+      
+      <!-- Case 1: Tree View -->
+      <template v-if="isTreeView">
+        <!-- Top Balance Header -->
+        <div class="top-balance-header" style="margin-bottom: 1rem;">
+          <div class="balance-row" style="align-items: center; margin-top: 0; width: 100%;">
+            <span class="balance-title" style="font-size: 1.5rem; font-weight: 800; color: #ffffff;">資產分配比</span>
+            <!-- Caret right in circle button matches the screenshot -->
+            <button class="nav-back-circle" @click="isTreeView = false" title="返回列表" style="background: #2c2c2e; color: #ffffff; width: 36px; height: 36px;">
+              <PhCaretRight size="20" weight="bold" />
+            </button>
+          </div>
+        </div>
+
+        <!-- Treemap / Allocation Blocks representation -->
+        <div class="treemap-container">
+          <!-- Left Column (Liabilities & Spacer) -->
+          <div v-if="liabPct > 0" class="treemap-column treemap-left">
+            <div class="treemap-spacer" :style="{ flex: 100 - liabPct }"></div>
+            <div class="treemap-block block-liab-val" :style="{ flex: liabPct }">
+              <span class="block-pct">{{ liabPct }}%</span>
+              <span class="block-name">負債</span>
+            </div>
+          </div>
+          
+          <!-- Right Column (Stacked Positive Assets) -->
+          <div class="treemap-column" :class="liabPct > 0 ? 'treemap-right' : 'treemap-full'">
+            <div v-if="investPct > 0" class="treemap-block block-invest-val" :style="{ flex: investPct }">
+              <span class="block-pct">{{ investPct }}%</span>
+              <span class="block-name">投資</span>
+            </div>
+            <div v-if="liquidPct > 0" class="treemap-block block-liquid-val" :style="{ flex: liquidPct }">
+              <span class="block-pct">{{ liquidPct }}%</span>
+              <span class="block-name">流動資金</span>
+            </div>
+            <div v-if="fixedPct > 0" class="treemap-block block-fixed-val" :style="{ flex: fixedPct }">
+              <span class="block-pct">{{ fixedPct }}%</span>
+              <span class="block-name">固定資產</span>
+            </div>
+            <div v-if="receivablePct > 0" class="treemap-block block-receivable-val" :style="{ flex: receivablePct }">
+              <span class="block-pct">{{ receivablePct }}%</span>
+              <span class="block-name">應收款</span>
+            </div>
+            <div v-if="totalPositiveAssets === 0" class="treemap-block" style="flex: 1; background: #2c2c2e; color: rgba(255,255,255,0.4); justify-content: center; align-items: center;">
+              <span>無資產分配數據</span>
+            </div>
+          </div>
+        </div>
+      </template>
+
+      <!-- Case 2: Standard List View -->
+      <template v-else>
+        <!-- Top Balance Header -->
+        <div class="top-balance-header">
+          <div class="balance-left">
+            <span class="balance-title">我的淨資產 (TWD)</span>
+            <button @click="togglePrivacy" class="privacy-btn">
+              <component :is="isHidden ? PhEyeSlash : PhEye" size="18" />
+            </button>
+          </div>
+          <div class="balance-row">
+            <span class="balance-amount">{{ isHidden ? '••••••' : formatCurrency(netWorth).replace('$', '') }}</span>
+            <div style="display: flex; gap: 10px; align-items: center;">
+              <!-- Circle button with > caret to switch to tree view -->
+              <button class="nav-back-circle" @click="isTreeView = true" title="查看資產分配比" style="background: rgba(0,0,0,0.03); color: var(--color-text); width: 36px; height: 36px;">
+                <PhCaretRight size="20" weight="bold" />
+              </button>
+              <button class="add-circular-btn" @click="showAddModal = true; addModalStep = 1" title="新增項目">
+                <PhPlus size="20" weight="bold" />
               </button>
             </div>
-            <div class="amount">{{ isHidden ? '****' : formatCurrency(netWorth) }}</div>
-           </div>
-        </div>
-
-        <!-- Allocation Chart - 獨立一行，有足夠空間顯示 legend -->
-        <div class="chart-row">
-          <div class="alloc-chart-wrap">
-            <Doughnut :data="chartData" :options="chartOptions" />
           </div>
         </div>
 
-        <div class="stats-row">
-          <div class="stat-item">
-            <label>💚 收入</label>
-            <div class="val income">{{ isHidden ? '****' : '+' + formatCurrency(totalIncome) }}</div>
+        <!-- Main Layout: Sidebar distribution progress bar + Cards -->
+        <div class="main-layout">
+          <!-- Vertical Accent Distribution Bar -->
+          <div class="left-bar-container">
+            <div class="bar-segment segment-liquid" :style="{ height: liquidBarPct + '%' }" title="流動資金"></div>
+            <div class="bar-segment segment-invest" :style="{ height: investBarPct + '%' }" title="投資"></div>
+            <div class="bar-segment segment-fixed" :style="{ height: fixedBarPct + '%' }" title="固定資產"></div>
+            <div class="bar-segment segment-receivable" :style="{ height: receivableBarPct + '%' }" title="應收款"></div>
           </div>
-          <div class="stat-item">
-            <label>❤️ 支出</label>
-            <div class="val expense">{{ isHidden ? '****' : '-' + formatCurrency(totalExpense) }}</div>
-          </div>
-          <div class="stat-item">
-            <label>💜 投資組合</label>
-            <div class="val invest">{{ isHidden ? '****' : formatCurrency(totalInvestmentValue) }}</div>
-          </div>
-          <div class="stat-item">
-            <label>💙 帳戶資產</label>
-            <div class="val assets">{{ isHidden ? '****' : formatCurrency(totalAssets) }}</div>
-          </div>
-        </div>
-      </div>
 
-
-    </div>
-
-    <!-- Analytics Section -->
-    <div class="analytics-section">
-      <!-- Trend Chart Card -->
-      <div class="card analysis-card trend-card">
-        <h3>收支趨勢 (本月 vs 上月)</h3>
-        <div class="trend-grid">
-          <div class="trend-item">
-            <span class="trend-label">淨結餘變化</span>
-            <div class="trend-val" :class="trendData.netDiff >= 0 ? 'success-text' : 'danger-text'">
-              {{ trendData.netDiff >= 0 ? '+' : '' }}{{ formatCurrency(trendData.netDiff) }}
-              <component :is="trendData.netDiff >= 0 ? PhTrendUp : PhTrendDown" size="16"/>
+          <!-- Right: Cards Column -->
+          <div class="list-column">
+            
+            <!-- Card: 流動資金 -->
+            <div class="group-wrapper" v-if="totalLiquidAssets > 0 || accounts.length === 0">
+              <div class="group-header-card bg-liquid" @click="toggleListExpand('liquid')" style="cursor: pointer;">
+                <span class="group-title-text">流動資金</span>
+                <div class="header-right-val" style="display: flex; align-items: center; gap: 6px;">
+                  <span class="group-value-text">{{ isHidden ? '••••••' : formatCurrency(totalLiquidAssets).replace('$', '') }}</span>
+                  <component :is="listExpanded.liquid ? PhCaretUp : PhCaretDown" size="14" class="caret-indicator-white" />
+                </div>
+              </div>
+              
+              <div class="group-body" v-if="listExpanded.liquid">
+                <div v-if="filteredAccounts('liquid').length > 0" class="group-card-expanded-list" style="display: flex; flex-direction: column; gap: 14px;">
+                  <div v-for="g in groupAccountsByCustomGroup('liquid')" :key="g.name" style="display: flex; flex-direction: column; gap: 8px;">
+                    <div v-if="g.name" style="font-size: 0.8rem; color: var(--color-text-muted); font-weight: bold; margin-left: 8px; margin-top: 6px; text-transform: uppercase; text-align: left;">
+                      {{ g.name }}
+                    </div>
+                    <div v-for="acc in g.items" :key="acc.id" class="list-sub-item-card" @click.stop="editAccount(acc)">
+                      <div class="sub-item-left">
+                        <component :is="getTypeIconAndColor(acc.type).icon" class="sub-icon text-green" size="16" weight="duotone" />
+                        <span class="sub-item-name">{{ acc.name }}</span>
+                      </div>
+                      <div class="sub-item-right-val">
+                        <span class="sub-item-val">{{ isHidden ? '••••••' : formatCurrency(acc.balance).replace('$', '') }}</span>
+                        <span v-if="acc.auto_record && acc.auto_record.enabled" class="sub-item-sync-icon" title="自動記帳啟用" style="margin-left: 6px; font-size: 0.8rem;">🔄</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="group-collapsed-body" v-else>
+                {{ liquidSubtitle }}
+              </div>
             </div>
-            <div class="trend-subtext">本月結餘 {{ formatCurrency(trendData.thisMonthNet) }}</div>
-          </div>
-          <div class="trend-item compact-trends">
-             <div class="sub-trend">
-               <span>支出 <span :class="trendData.expGrowth > 0 ? 'danger-text' : 'success-text'"><component :is="trendData.expGrowth > 0 ? PhTrendUp : PhTrendDown" size="12" style="vertical-align: middle;"/> {{ Math.abs(trendData.expGrowth) }}%</span></span>
-             </div>
-             <div class="sub-trend">
-               <span>收入 <span :class="trendData.incGrowth > 0 ? 'success-text' : 'danger-text'"><component :is="trendData.incGrowth > 0 ? PhTrendUp : PhTrendDown" size="12" style="vertical-align: middle;"/> {{ Math.abs(trendData.incGrowth) }}%</span></span>
-             </div>
+
+            <!-- Card: 投資 (Solid Header Block style) -->
+            <div class="group-wrapper" v-if="totalInvestments > 0">
+              <div class="group-header-card bg-invest" @click="toggleListExpand('invest')" style="cursor: pointer;">
+                <span class="group-title-text">投資</span>
+                <div class="header-right-val" style="display: flex; align-items: center; gap: 6px;">
+                  <span class="group-value-text">{{ isHidden ? '••••••' : formatCurrency(totalInvestments).replace('$', '') }}</span>
+                  <component :is="listExpanded.invest ? PhCaretUp : PhCaretDown" size="14" class="caret-indicator-white" />
+                </div>
+              </div>
+              
+              <div class="group-body" v-if="listExpanded.invest">
+                <div v-if="groupedInvestments.length > 0" class="group-card-expanded-list" style="display: flex; flex-direction: column; gap: 14px;">
+                  <div v-for="g in groupedInvestmentsByCustomGroup" :key="g.name" style="display: flex; flex-direction: column; gap: 8px;">
+                    <div v-if="g.name" style="font-size: 0.8rem; color: var(--color-text-muted); font-weight: bold; margin-left: 8px; margin-top: 6px; text-transform: uppercase; text-align: left;">
+                      {{ g.name }}
+                    </div>
+                    <div v-for="group in g.items" :key="group.symbol" class="sub-item-card" @click.stop="openInvestmentDetail(group.symbol)" style="cursor: pointer;">
+                      <!-- Circular Percentage Badge -->
+                      <div class="sub-item-badge">
+                        {{ Math.round(group.percentage) }}%
+                      </div>
+                      
+                      <!-- Stock/Crypto Details -->
+                      <div class="sub-item-info">
+                        <div class="sub-item-name">{{ group.name }}</div>
+                        <div class="sub-item-desc">
+                          持有 {{ group.qty }}, {{ group.currency }} {{ group.current_price }}
+                        </div>
+                      </div>
+
+                      <!-- Value & Date -->
+                      <div class="sub-item-right">
+                        <div class="sub-item-val">
+                          {{ isHidden ? '••••••' : formatCurrency(group.valueTwd).replace('$', '') }}
+                        </div>
+                        <div class="sub-item-date">{{ formatDate(group.price_updated_at) }}</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="group-collapsed-body" v-else>
+                {{ investSubtitle }}
+              </div>
+            </div>
+
+            <!-- Card: 固定資產 -->
+            <div class="group-wrapper" v-if="totalFixedAssets > 0">
+              <div class="group-header-card bg-fixed" @click="toggleListExpand('fixed')" style="cursor: pointer;">
+                <span class="group-title-text">固定資產</span>
+                <div class="header-right-val" style="display: flex; align-items: center; gap: 6px;">
+                  <span class="group-value-text">{{ isHidden ? '••••••' : formatCurrency(totalFixedAssets).replace('$', '') }}</span>
+                  <component :is="listExpanded.fixed ? PhCaretUp : PhCaretDown" size="14" class="caret-indicator-white" />
+                </div>
+              </div>
+              
+              <div class="group-body" v-if="listExpanded.fixed">
+                <div v-if="filteredAccounts('fixed').length > 0" class="group-card-expanded-list" style="display: flex; flex-direction: column; gap: 14px;">
+                  <div v-for="g in groupAccountsByCustomGroup('fixed')" :key="g.name" style="display: flex; flex-direction: column; gap: 8px;">
+                    <div v-if="g.name" style="font-size: 0.8rem; color: var(--color-text-muted); font-weight: bold; margin-left: 8px; margin-top: 6px; text-transform: uppercase; text-align: left;">
+                      {{ g.name }}
+                    </div>
+                    <div v-for="acc in g.items" :key="acc.id" class="list-sub-item-card" @click.stop="editAccount(acc)">
+                      <div class="sub-item-left">
+                        <component :is="getTypeIconAndColor(acc.type).icon" class="sub-icon text-blue" size="16" weight="duotone" />
+                        <span class="sub-item-name">{{ acc.name }}</span>
+                      </div>
+                      <div class="sub-item-right-val">
+                        <span class="sub-item-val">{{ isHidden ? '••••••' : formatCurrency(acc.balance).replace('$', '') }}</span>
+                        <span v-if="acc.auto_record && acc.auto_record.enabled" class="sub-item-sync-icon" title="自動記帳啟用" style="margin-left: 6px; font-size: 0.8rem;">🔄</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="group-collapsed-body" v-else>
+                {{ fixedSubtitle }}
+              </div>
+            </div>
+
+            <!-- Card: 應收款 -->
+            <div class="group-wrapper" v-if="totalReceivables > 0">
+              <div class="group-header-card bg-receivable" @click="toggleListExpand('receivable')" style="cursor: pointer;">
+                <span class="group-title-text">應收款</span>
+                <div class="header-right-val" style="display: flex; align-items: center; gap: 6px;">
+                  <span class="group-value-text">{{ isHidden ? '••••••' : formatCurrency(totalReceivables).replace('$', '') }}</span>
+                  <component :is="listExpanded.receivable ? PhCaretUp : PhCaretDown" size="14" class="caret-indicator-white" />
+                </div>
+              </div>
+              
+              <div class="group-body" v-if="listExpanded.receivable">
+                <div v-if="filteredAccounts('receivable').length > 0" class="group-card-expanded-list" style="display: flex; flex-direction: column; gap: 14px;">
+                  <div v-for="g in groupAccountsByCustomGroup('receivable')" :key="g.name" style="display: flex; flex-direction: column; gap: 8px;">
+                    <div v-if="g.name" style="font-size: 0.8rem; color: var(--color-text-muted); font-weight: bold; margin-left: 8px; margin-top: 6px; text-transform: uppercase; text-align: left;">
+                      {{ g.name }}
+                    </div>
+                    <div v-for="acc in g.items" :key="acc.id" class="list-sub-item-card" @click.stop="editAccount(acc)">
+                      <div class="sub-item-left">
+                        <component :is="getTypeIconAndColor(acc.type).icon" class="sub-icon text-light-blue" size="16" weight="duotone" />
+                        <span class="sub-item-name">{{ acc.name }}</span>
+                      </div>
+                      <div class="sub-item-right-val">
+                        <span class="sub-item-val">{{ isHidden ? '••••••' : formatCurrency(acc.balance).replace('$', '') }}</span>
+                        <span v-if="acc.auto_record && acc.auto_record.enabled" class="sub-item-sync-icon" title="自動記帳啟用" style="margin-left: 6px; font-size: 0.8rem;">🔄</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="group-collapsed-body" v-else>
+                {{ receivableSubtitle }}
+              </div>
+            </div>
+
+            <!-- Card: 負債項目 -->
+            <div class="group-wrapper" v-if="totalLiabilities > 0">
+              <div class="group-header-card bg-liab" @click="toggleListExpand('liab')" style="cursor: pointer;">
+                <span class="group-title-text">負債</span>
+                <div class="header-right-val" style="display: flex; align-items: center; gap: 6px;">
+                  <span class="group-value-text">-{{ isHidden ? '••••••' : formatCurrency(totalLiabilities).replace('$', '') }}</span>
+                  <component :is="listExpanded.liab ? PhCaretUp : PhCaretDown" size="14" class="caret-indicator-white" />
+                </div>
+              </div>
+              
+              <div class="group-body" v-if="listExpanded.liab">
+                <div v-if="filteredAccounts('liab').length > 0" class="group-card-expanded-list" style="display: flex; flex-direction: column; gap: 14px;">
+                  <div v-for="g in groupAccountsByCustomGroup('liab')" :key="g.name" style="display: flex; flex-direction: column; gap: 8px;">
+                    <div v-if="g.name" style="font-size: 0.8rem; color: var(--color-text-muted); font-weight: bold; margin-left: 8px; margin-top: 6px; text-transform: uppercase; text-align: left;">
+                      {{ g.name }}
+                    </div>
+                    <div v-for="acc in g.items" :key="acc.id" class="list-sub-item-card" @click.stop="editAccount(acc)">
+                      <div class="sub-item-left">
+                        <component :is="getTypeIconAndColor(acc.type).icon" class="sub-icon text-red" size="16" weight="duotone" />
+                        <span class="sub-item-name">{{ acc.name }}</span>
+                      </div>
+                      <div class="sub-item-right-val">
+                        <span class="sub-item-val">{{ isHidden ? '••••••' : formatCurrency(acc.balance).replace('$', '') }}</span>
+                        <span v-if="acc.auto_record && acc.auto_record.enabled" class="sub-item-sync-icon" title="自動記帳啟用" style="margin-left: 6px; font-size: 0.8rem;">🔄</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="group-collapsed-body" v-else>
+                {{ liabSubtitle }}
+              </div>
+            </div>
+
+            <!-- Empty State -->
+            <div v-if="accounts.length === 0 && investments.length === 0" class="empty-state">
+               <div style="font-size: 2.2rem; margin-bottom: 0.5rem;">🏦</div>
+               <div>尚無任何資產項目</div>
+               <div style="font-size: 0.82rem; margin-top: 0.3rem; opacity: 0.6;">
+                 請點擊右上角「+」按鈕開始加入資產、投資或負債。
+               </div>
+            </div>
+
           </div>
         </div>
-        
-        <!-- Line Chart -->
-        <h4 style="margin: 1.5rem 0 0.5rem 0; font-size: 0.9rem; color: var(--color-text-muted); font-weight: normal;">近半年走勢</h4>
-        <div class="chart-container" style="height: 180px; width: 100%;">
-           <Line :data="monthlyTrendData" :options="trendChartOptions" />
+      </template>
+    </div>
+
+    <!-- ── 2. 趨勢圖視圖 (Trend Tab) ────────────────────────────────── -->
+    <div v-if="currentTab === 'trend'" class="tab-view-content flex-grow-trend" style="background: #121214; height: 100vh; min-height: 100vh; padding: 0; color: #ffffff; box-sizing: border-box; overflow: hidden; display: flex; flex-direction: column;">
+      <!-- Fixed Header & Segment Selector Area -->
+      <div style="flex-shrink: 0; padding: 0 16px; background: #121214;">
+        <!-- Header -->
+        <div class="modal-navbar" style="background: #121214; padding-top: 14px; padding-bottom: 14px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255, 255, 255, 0.05); margin-bottom: 0;">
+          <!-- Empty Spacer to keep title centered -->
+          <div style="width: 36px;"></div>
+          <span class="nav-title" style="color: #ffffff; font-size: 1.15rem; font-weight: 700;">趨勢圖</span>
+          <!-- Close button X -->
+          <button class="nav-back-circle" @click="currentTab = 'list'" title="關閉" style="background: #2c2c2e; color: #ffffff; width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; border: none; cursor: pointer; margin: 0;">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+          </button>
+        </div>
+
+        <!-- Segment Selector -->
+        <div style="display: flex; background: #1c1c1e; padding: 4px; border-radius: 20px; margin-top: 18px; margin-bottom: 20px;">
+          <button 
+            @click="trendType = 'net_worth'"
+            :style="{
+              flex: 1,
+              padding: '10px 0',
+              borderRadius: '16px',
+              border: 'none',
+              fontSize: '0.9rem',
+              fontWeight: '700',
+              cursor: 'pointer',
+              background: trendType === 'net_worth' ? 'rgba(255,255,255,0.12)' : 'transparent',
+              color: '#ffffff',
+              boxShadow: 'none'
+            }"
+          >
+            淨資產與負債
+          </button>
+          <button 
+            @click="trendType = 'liquid_invest'"
+            :style="{
+              flex: 1,
+              padding: '10px 0',
+              borderRadius: '16px',
+              border: 'none',
+              fontSize: '0.9rem',
+              fontWeight: '700',
+              cursor: 'pointer',
+              background: trendType === 'liquid_invest' ? 'rgba(255,255,255,0.12)' : 'transparent',
+              color: '#ffffff',
+              boxShadow: 'none'
+            }"
+          >
+            流動資金與投資
+          </button>
         </div>
       </div>
 
-      <!-- Consumption Analysis Card -->
-      <div class="card analysis-card consumption-card">
-        <h3>本月消費分析</h3>
-        <div class="chart-container large-chart">
-           <Doughnut :data="consumptionChartData" :options="consumptionChartOptions" v-if="consumptionChartData.labels[0] !== '無資料'" />
-           <div v-else class="empty-state" style="height: 150px; display: flex; align-items: center; justify-content: center;">尚無消費紀錄</div>
+      <!-- Scrollable Contents -->
+      <div style="flex: 1; overflow-y: auto; padding: 0 16px; box-sizing: border-box; -webkit-overflow-scrolling: touch;">
+        <!-- Date Range & Summary Info -->
+        <div style="text-align: left; padding: 0 4px; margin-bottom: 24px;">
+          <div style="font-size: 0.85rem; color: #828e9e; font-weight: bold; margin-bottom: 10px;">
+            {{ trendDateRangeText }}
+          </div>
+          <template v-if="trendType === 'net_worth'">
+            <div style="font-size: 0.95rem; font-weight: 700; color: #ffffff; line-height: 1.6;">
+              {{ netWorthSummaryText.nw }}
+            </div>
+            <div style="font-size: 0.95rem; font-weight: 700; color: #ffffff; line-height: 1.6; margin-top: 4px;">
+              {{ netWorthSummaryText.liab }}
+            </div>
+          </template>
+          <template v-else>
+            <div style="font-size: 0.95rem; font-weight: 700; color: #ffffff; line-height: 1.6;">
+              {{ liquidInvestSummaryText.liquid }}
+            </div>
+            <div style="font-size: 0.95rem; font-weight: 700; color: #ffffff; line-height: 1.6; margin-top: 4px;">
+              {{ liquidInvestSummaryText.invest }}
+            </div>
+          </template>
+        </div>
+
+        <!-- Legend -->
+        <div style="display: flex; gap: 24px; align-items: center; margin-bottom: 24px; padding-left: 12px;">
+          <template v-if="trendType === 'net_worth'">
+            <div style="display: flex; align-items: center; gap: 6px; font-size: 0.82rem; font-weight: bold; color: #ffffff;">
+              <span style="display: inline-block; width: 12px; height: 12px; background: #5c67f5; border-radius: 2px;"></span>
+              我的淨資產
+            </div>
+            <div style="display: flex; align-items: center; gap: 6px; font-size: 0.82rem; font-weight: bold; color: #ffffff;">
+              <!-- Dotted box indicator matching native design -->
+              <span style="display: inline-flex; width: 12px; height: 12px; border: 1.5px dashed #a0a0a5; box-sizing: border-box; border-radius: 2px;"></span>
+              負債
+            </div>
+          </template>
+          <template v-else>
+            <div style="display: flex; align-items: center; gap: 6px; font-size: 0.82rem; font-weight: bold; color: #ffffff;">
+              <span style="display: inline-block; width: 12px; height: 12px; background: #2ec173; border-radius: 2px;"></span>
+              流動資金
+            </div>
+            <div style="display: flex; align-items: center; gap: 6px; font-size: 0.82rem; font-weight: bold; color: #ffffff;">
+              <span style="display: inline-block; width: 12px; height: 12px; background: #7839ec; border-radius: 2px;"></span>
+              投資
+            </div>
+          </template>
+        </div>
+
+        <!-- Line Chart Container -->
+        <div style="height: 260px; position: relative; margin-bottom: 32px;">
+          <Line :data="trendChartData" :options="trendChartOptions" />
+        </div>
+
+        <!-- Custom Date Picker Row -->
+        <div v-if="timeFilter === 'ALL'" style="display: flex; gap: 12px; align-items: center; margin-bottom: 20px; padding: 0 4px;">
+          <div style="flex: 1; display: flex; flex-direction: column; gap: 4px; text-align: left;">
+            <span style="font-size: 0.75rem; color: #828e9e; font-weight: bold;">開始日期</span>
+            <input type="date" v-model="customStartDate" class="reset-input" style="background: #1c1c1e !important; border: 1px solid rgba(255,255,255,0.1) !important; color: #ffffff !important; padding: 8px 12px !important; border-radius: 12px !important; font-size: 0.85rem !important; width: 100% !important; outline: none; margin: 0 !important; height: auto !important; line-height: normal !important;" />
+          </div>
+          <div style="flex: 1; display: flex; flex-direction: column; gap: 4px; text-align: left;">
+            <span style="font-size: 0.75rem; color: #828e9e; font-weight: bold;">結束日期</span>
+            <input type="date" v-model="customEndDate" class="reset-input" style="background: #1c1c1e !important; border: 1px solid rgba(255,255,255,0.1) !important; color: #ffffff !important; padding: 8px 12px !important; border-radius: 12px !important; font-size: 0.85rem !important; width: 100% !important; outline: none; margin: 0 !important; height: auto !important; line-height: normal !important;" />
+          </div>
+        </div>
+
+        <!-- Capsule Time Filter Selector -->
+        <div style="display: flex; background: #1c1c1e; padding: 4px; border-radius: 25px; gap: 4px; margin-bottom: 20px;">
+          <button 
+            v-for="time in [
+              { label: '30天', value: '30D' },
+              { label: '6月', value: '6M' },
+              { label: '1年', value: '1Y' },
+              { label: '年初至今', value: 'YTD' },
+              { label: '自訂', value: 'ALL' }
+            ]"
+            :key="time.value"
+            @click="timeFilter = time.value"
+            :style="{
+              flex: 1,
+              padding: '10px 0',
+              borderRadius: '20px',
+              border: 'none',
+              fontSize: '0.82rem',
+              fontWeight: '700',
+              cursor: 'pointer',
+              background: timeFilter === time.value ? 'rgba(255,255,255,0.12)' : 'transparent',
+              color: '#ffffff',
+              boxShadow: 'none'
+            }"
+          >
+            {{ time.label }}
+          </button>
+        </div>
+
+        <!-- Bottom spacer to prevent overlap with floating BottomNav -->
+        <div style="height: 110px; flex-shrink: 0;"></div>
+      </div>
+    </div>
+
+    <!-- ── 3. 資料管理視圖 (Settings Tab) ────────────────────────────── -->
+    <div v-if="currentTab === 'settings'" class="tab-view-content scrollable-settings">
+      <div class="settings-header-row">
+        <h3>管理所有原始帳目</h3>
+        <button class="icon-text-btn" @click="refreshPrices" :disabled="isRefreshing">
+          <PhArrowClockwise size="16" :class="{ spin: isRefreshing }" />
+          <span>{{ isRefreshing ? '更新中' : '更新最新股價' }}</span>
+        </button>
+      </div>
+
+      <!-- Accounts Table List -->
+      <div class="settings-section card">
+        <h4 class="section-title">🏦 流動、固定、應收與負債</h4>
+        <div class="settings-table-list" v-if="accounts.length > 0">
+          <div v-for="acc in accounts" :key="acc.id" class="settings-table-item" @click="editAccount(acc)">
+            <div class="item-meta">
+              <span class="item-name">{{ acc.name }}</span>
+              <span class="item-type-badge">{{ translateTypeSettings(acc.type) }}</span>
+            </div>
+            <div class="item-right-wrap">
+              <span class="item-value">{{ formatCurrency(acc.balance) }}</span>
+              <button class="delete-btn" @click.stop="deleteAccount(acc.id)" title="刪除">
+                <PhTrash size="16" />
+              </button>
+            </div>
+          </div>
+        </div>
+        <div v-else class="settings-empty">目前尚無帳戶資料</div>
+      </div>
+
+      <!-- Investments Table List -->
+      <div class="settings-section card" style="margin-top: 1rem;">
+        <h4 class="section-title">📈 證券與投資部位</h4>
+        <div class="settings-table-list" v-if="investments.length > 0">
+          <div v-for="inv in investments" :key="inv.id" class="settings-table-item" @click="editInvestment(inv)">
+            <div class="item-meta">
+              <span class="item-name">{{ inv.symbol }} ({{ inv.name }})</span>
+              <span class="item-type-badge">{{ translateTypeSettings(inv.asset_class) }} · {{ inv.quantity }} 單位 @ {{ inv.currency }} {{ inv.buy_price }}</span>
+            </div>
+            <div class="item-right-wrap">
+              <span class="item-value">{{ formatCurrency(inv.quantity * inv.current_price) }}</span>
+              <button class="delete-btn" @click.stop="deleteInvestment(inv.id)" title="刪除">
+                <PhTrash size="16" />
+              </button>
+            </div>
+          </div>
+        </div>
+        <div v-else class="settings-empty">目前尚無投資資料</div>
+      </div>
+    </div>
+
+    <!-- ── 4. Unified Add Modal (Step 1: Accordion menu | Step 1.5: Provider list | Step 2: Form | Step 3: Auto-Record) ── -->
+    <div v-if="showAddModal" class="modal-overlay" @click.self="closeAddModal()">
+      
+      <!-- Step 1: Accordion list matching Percento screenshot -->
+      <div class="modal-content-full" v-if="addModalStep === 1">
+        <!-- Navbar matching native mobile app screenshot -->
+        <div class="modal-navbar">
+          <button class="nav-back-circle" @click="closeAddModal()" title="關閉">
+            <PhCaretLeft size="20" weight="bold" />
+          </button>
+          <span class="nav-title">新增帳戶</span>
+          <div class="nav-placeholder"></div>
+        </div>
+
+        <div class="cat-blocks-stack">
+          
+          <!-- Group 1: 流動資金 -->
+          <div class="cat-group-wrapper">
+            <button class="cat-block-btn block-liquid" @click="toggleAccordion('liquid')">
+              流動資金
+            </button>
+            <transition name="accordion-slide">
+              <div class="accordion-panel" v-if="expandedCategories.liquid">
+                <button class="sub-type-item" @click="selectSubtype('liquid', 'Cash', '現金')">
+                  <div class="sub-item-left">
+                    <PhWallet class="sub-icon text-green" size="20" weight="duotone" />
+                    <span>現金</span>
+                  </div>
+                </button>
+                <button class="sub-type-item" @click="openSubList('E-Wallet')">
+                  <div class="sub-item-left">
+                    <PhCloudArrowUp class="sub-icon text-green" size="20" weight="duotone" />
+                    <span>電子錢包</span>
+                  </div>
+                  <PhCaretRight class="chevron-icon" size="16" weight="bold" />
+                </button>
+                <button class="sub-type-item" @click="selectSubtype('liquid', 'Bank', '銀行帳戶')">
+                  <div class="sub-item-left">
+                    <PhCreditCard class="sub-icon text-green" size="20" weight="duotone" />
+                    <span>銀行帳戶</span>
+                  </div>
+                </button>
+                <button class="sub-type-item" @click="selectSubtype('liquid', 'OtherLiquid', '其他')">
+                  <div class="sub-item-left">
+                    <PhCards class="sub-icon text-green" size="20" weight="duotone" />
+                    <span>其他</span>
+                  </div>
+                </button>
+              </div>
+            </transition>
+          </div>
+
+          <!-- Group 2: 投資 -->
+          <div class="cat-group-wrapper">
+            <button class="cat-block-btn block-invest" @click="toggleAccordion('invest')">
+              投資
+            </button>
+            <transition name="accordion-slide">
+              <div class="accordion-panel" v-if="expandedCategories.invest">
+                <button class="sub-type-item" @click="selectSubtype('invest', 'Fund', '投資基金')">
+                  <div class="sub-item-left">
+                    <PhCurrencyCny class="sub-icon text-purple" size="20" weight="duotone" />
+                    <span>投資基金</span>
+                  </div>
+                </button>
+                <button class="sub-type-item" @click="openSubList('Stock')">
+                  <div class="sub-item-left">
+                    <PhChartBar class="sub-icon text-purple" size="20" weight="duotone" />
+                    <span>股票</span>
+                  </div>
+                  <PhCaretRight class="chevron-icon" size="16" weight="bold" />
+                </button>
+                <button class="sub-type-item" @click="selectSubtype('invest', 'Crypto', '加密貨幣')">
+                  <div class="sub-item-left">
+                    <PhCurrencyBtc class="sub-icon text-purple" size="20" weight="duotone" />
+                    <span>加密貨幣</span>
+                  </div>
+                </button>
+                <button class="sub-type-item" @click="selectSubtype('invest', 'Metal', '貴金屬')">
+                  <div class="sub-item-left">
+                    <PhCube class="sub-icon text-purple" size="20" weight="duotone" />
+                    <span>貴金屬</span>
+                  </div>
+                </button>
+                <button class="sub-type-item" @click="openSubList('OtherInvest')">
+                  <div class="sub-item-left">
+                    <PhLeaf class="sub-icon text-purple" size="20" weight="duotone" />
+                    <span>其他投資</span>
+                  </div>
+                  <PhCaretRight class="chevron-icon" size="16" weight="bold" />
+                </button>
+              </div>
+            </transition>
+          </div>
+
+          <!-- Group 3: 固定資產 -->
+          <div class="cat-group-wrapper">
+            <button class="cat-block-btn block-fixed" @click="toggleAccordion('fixed')">
+              固定資產
+            </button>
+            <transition name="accordion-slide">
+              <div class="accordion-panel" v-if="expandedCategories.fixed">
+                <button class="sub-type-item" @click="selectSubtype('fixed', 'RealEstate', '房產')">
+                  <div class="sub-item-left">
+                    <PhBuildings class="sub-icon text-blue" size="20" weight="duotone" />
+                    <span>房產</span>
+                  </div>
+                </button>
+                <button class="sub-type-item" @click="selectSubtype('fixed', 'Car', '汽車')">
+                  <div class="sub-item-left">
+                    <PhCar class="sub-icon text-blue" size="20" weight="duotone" />
+                    <span>汽車</span>
+                  </div>
+                </button>
+                <button class="sub-type-item" @click="selectSubtype('fixed', 'OtherFixed', '其他固定資產')">
+                  <div class="sub-item-left">
+                    <PhLock class="sub-icon text-blue" size="20" weight="duotone" />
+                    <span>其他固定資產</span>
+                  </div>
+                </button>
+              </div>
+            </transition>
+          </div>
+
+          <!-- Group 4: 應收款 -->
+          <div class="cat-group-wrapper">
+            <button class="cat-block-btn block-receivable" @click="toggleAccordion('receivable')">
+              應收款
+            </button>
+            <transition name="accordion-slide">
+              <div class="accordion-panel" v-if="expandedCategories.receivable">
+                <button class="sub-type-item" @click="selectSubtype('receivable', 'Receivable', '應收款')">
+                  <div class="sub-item-left">
+                    <PhUsers class="sub-icon text-light-blue" size="20" weight="duotone" />
+                    <span>應收款</span>
+                  </div>
+                </button>
+              </div>
+            </transition>
+          </div>
+
+          <!-- Group 5: 負債 -->
+          <div class="cat-group-wrapper">
+            <button class="cat-block-btn block-liab" @click="toggleAccordion('liab')">
+              負債
+            </button>
+            <transition name="accordion-slide">
+              <div class="accordion-panel" v-if="expandedCategories.liab">
+                <button class="sub-type-item" @click="selectSubtype('liab', 'Credit Card', '信用卡')">
+                  <div class="sub-item-left">
+                    <PhCreditCard class="sub-icon text-gray-blue" size="20" weight="duotone" />
+                    <span>信用卡</span>
+                  </div>
+                </button>
+                <button class="sub-type-item" @click="openSubList('Loan')">
+                  <div class="sub-item-left">
+                    <PhBank class="sub-icon text-gray-blue" size="20" weight="duotone" />
+                    <span>貸款</span>
+                  </div>
+                  <PhCaretRight class="chevron-icon" size="16" weight="bold" />
+                </button>
+                <button class="sub-type-item" @click="selectSubtype('liab', 'Payable', '應付款')">
+                  <div class="sub-item-left">
+                    <PhCreditCard class="sub-icon text-gray-blue" size="20" weight="duotone" />
+                    <span>應付款</span>
+                  </div>
+                </button>
+                <button class="sub-type-item" @click="selectSubtype('liab', 'OtherLiab', '其他負債')">
+                  <div class="sub-item-left">
+                    <PhCreditCard class="sub-icon text-gray-blue" size="20" weight="duotone" />
+                    <span>其他負債</span>
+                  </div>
+                </button>
+              </div>
+            </transition>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Step 1.5: Sub-Type specific options (E-Wallet, Stock, Loan, etc.) -->
+      <div class="modal-content-full" v-else-if="addModalStep === 1.5">
+        <div class="modal-navbar">
+          <button class="nav-back-circle" @click="addModalStep = 1" title="返回">
+            <PhCaretLeft size="20" weight="bold" />
+          </button>
+          <span class="nav-title">{{ subListTitle }}</span>
+          <div class="nav-placeholder"></div>
+        </div>
+
+        <div class="cat-blocks-stack" style="margin-top: 16px;">
+          <button v-for="item in subListOptions" :key="item.label" class="sub-type-item" @click="selectProvider(item)">
+            <div class="sub-item-left">
+              <component :is="item.icon" class="sub-icon" :class="item.colorClass" size="20" weight="duotone" />
+              <span>{{ item.label }}</span>
+            </div>
+          </button>
+        </div>
+      </div>
+
+      <!-- Step 2: Specific Input Form with Back arrow button -->
+      <div class="modal-content-full" v-else-if="addModalStep === 2" :style="{ '--focused-color': getCategoryThemeColor(newAsset.category) }">
+        <div class="modal-navbar">
+          <button class="nav-back-circle" @click="isEditing ? closeAddModal() : (subListType ? addModalStep = 1.5 : addModalStep = 1)" title="返回">
+            <PhCaretLeft size="20" weight="bold" />
+          </button>
+          <span class="nav-title">{{ newAsset.category === 'invest' ? '投資' : '帳戶' }}</span>
+          <!-- Save checkmark in top right navbar -->
+          <button class="nav-save-circle" @click="addAssetItem" :disabled="isSaving" title="儲存">
+            <div v-if="isSaving" class="mini-spinner"></div>
+            <PhCheck v-else size="20" weight="bold" />
+          </button>
+        </div>
+
+        <div class="provider-type-row">
+          <span class="row-label-gray">帳戶</span>
+          <div class="provider-type-right">
+            <template v-if="['Stock', 'Fund'].includes(newAsset.type)">
+              <div class="region-badge-circle" :style="{ background: isTaiwanStock(newAsset.symbol) ? 'rgba(120,57,236,0.15)' : 'rgba(92,103,245,0.15)', color: isTaiwanStock(newAsset.symbol) ? '#7839ec' : '#5c67f5', border: isTaiwanStock(newAsset.symbol) ? '1px solid rgba(120,57,236,0.3)' : '1px solid rgba(92,103,245,0.3)', width: '24px', height: '24px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', fontSize: '0.65rem', marginRight: '6px' }">
+                {{ isTaiwanStock(newAsset.symbol) ? 'TW' : 'US' }}
+              </div>
+              <span class="provider-type-text">{{ isTaiwanStock(newAsset.symbol) ? '台股' : '美股' }}</span>
+            </template>
+            <template v-else>
+              <component :is="getTypeIconAndColor(newAsset.type).icon" class="sub-icon" :class="getTypeIconAndColor(newAsset.type).color" size="20" weight="duotone" />
+              <span class="provider-type-text">{{ translateTypeSettings(newAsset.type) }}</span>
+            </template>
+          </div>
+        </div>
+
+        <div class="form-body">
+          
+          <!-- Case A: Stock, Crypto, Fund (Investment Lot fields) -->
+          <template v-if="['Stock', 'Crypto', 'Fund'].includes(newAsset.type)">
+            <div class="form-card-black">
+              <!-- 股票代號 -->
+              <div class="form-item-row">
+                <div class="row-label-group" style="display: flex; align-items: center; gap: 4px;">
+                  <span class="row-label">股票代號</span>
+                  <PhInfo size="14" style="color: var(--color-text-muted); opacity: 0.8;" />
+                </div>
+                <input v-model="newAsset.symbol" :placeholder="newAsset.type === 'Stock' ? 'TSLA 或 0050' : 'BTC'" class="input-flat-right text-right" style="text-transform: uppercase; font-weight: 700; width: 120px;" />
+              </div>
+
+              <!-- 股數 (With Stacked Subtext) -->
+              <div class="form-item-row-stacked" style="padding: 14px 18px; border-bottom: 1px solid rgba(255, 255, 255, 0.05); display: flex; flex-direction: column;">
+                <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+                  <span class="row-label">股數</span>
+                  <div class="row-value-wrapper" style="display: flex; align-items: center; gap: 8px;">
+                    <input v-model.number="newAsset.quantity" type="number" step="0.0001" placeholder="0" class="input-flat-right text-right" style="font-weight: 700; font-size: 1.15rem; width: 120px;" />
+                    <span class="currency-badge" style="background: rgba(255,255,255,0.08); padding: 4px 8px; border-radius: 6px; font-size: 0.75rem; font-weight: 700;">{{ isTaiwanStock(newAsset.symbol) ? 'TWD' : 'USD' }}</span>
+                  </div>
+                </div>
+                <!-- Subtext Row -->
+                <div style="display: flex; justify-content: space-between; align-items: center; width: 100%; margin-top: 8px; font-size: 0.8rem; color: var(--color-text-muted);">
+                  <!-- Left side: Edit buy price inline -->
+                  <div style="display: flex; align-items: center; gap: 4px;">
+                    <span>單價:</span>
+                    <span style="color: white; font-weight: 600; display: flex; align-items: center; gap: 2px;">
+                      {{ isTaiwanStock(newAsset.symbol) ? 'TWD' : 'USD' }}
+                      <input v-model.number="newAsset.buy_price" type="number" step="0.01" class="input-flat-right text-right" style="width: 70px; background: transparent; border: none; border-bottom: 1px dashed rgba(255,255,255,0.3); color: white; padding: 0 4px; font-weight: 700; font-size: 0.8rem; margin: 0;" />
+                    </span>
+                  </div>
+                  <!-- Right side: computed total value -->
+                  <span style="font-weight: 600; color: rgba(255,255,255,0.5);">
+                    = {{ isTaiwanStock(newAsset.symbol) ? 'TWD' : 'USD' }} {{ formatInvestNumber(Number(newAsset.quantity || 0) * Number(newAsset.buy_price || 0)) }}
+                  </span>
+                </div>
+              </div>
+
+              <!-- 自定名稱 -->
+              <div class="form-item-row">
+                <span class="row-label">自定名稱</span>
+                <input v-model="newAsset.name" placeholder="例: 元大台灣 50" class="input-flat-right text-right" />
+              </div>
+
+              <!-- 連結扣款帳戶 -->
+              <div class="form-item-row" style="position: relative;">
+                <span class="row-label">連結扣款帳戶</span>
+                <div class="row-value-wrapper">
+                  <span class="display-val" style="color: #ffffff; font-size: 0.95rem; font-weight: 700;">
+                    {{ accounts.find(a => a.id === newAsset.funding_account_id)?.name || '不連結扣款' }}
+                  </span>
+                  <PhCaretRight size="16" class="chevron-icon" />
+                </div>
+                <select v-model="newAsset.funding_account_id" class="invisible-select">
+                  <option :value="null">不連結扣款</option>
+                  <option 
+                    v-for="acc in accounts.filter(a => ['Bank', 'Cash', 'E-Wallet', 'OtherLiquid'].includes(a.type))" 
+                    :key="acc.id" 
+                    :value="acc.id"
+                  >
+                    {{ acc.name }} ({{ translateTypeSettings(acc.type) }})
+                  </option>
+                </select>
+              </div>
+
+              <!-- 自訂群組 -->
+              <div class="form-item-row" :style="{ borderBottom: existingGroups.length > 0 ? 'none' : '1px solid rgba(255, 255, 255, 0.05)' }">
+                <span class="row-label">自訂群組</span>
+                <input v-model="newAsset.custom_group" placeholder="例: 台股、美股、ETF" class="input-flat-right text-right" />
+              </div>
+              <div v-if="existingGroups.length > 0" style="padding: 0 18px 14px 18px; display: flex; flex-wrap: wrap; gap: 8px; border-bottom: 1px solid rgba(255, 255, 255, 0.05); margin-top: -4px;">
+                <button 
+                  v-for="grp in existingGroups" 
+                  :key="grp"
+                  @click.prevent="newAsset.custom_group = grp"
+                  type="button"
+                  style="background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(255, 255, 255, 0.08); color: rgba(255, 255, 255, 0.7); padding: 4px 10px; border-radius: 12px; font-size: 0.75rem; cursor: pointer; transition: all 0.2s; box-shadow: none;"
+                  :style="{
+                    background: newAsset.custom_group === grp ? 'rgba(92, 103, 245, 0.2)' : 'rgba(255, 255, 255, 0.06)',
+                    borderColor: newAsset.custom_group === grp ? '#5c67f5' : 'rgba(255, 255, 255, 0.08)',
+                    color: newAsset.custom_group === grp ? '#ffffff' : 'rgba(255, 255, 255, 0.7)'
+                  }"
+                >
+                  {{ grp }}
+                </button>
+              </div>
+
+              <!-- 計入圖表 -->
+              <div class="form-item-row">
+                <span class="row-label">計入圖表</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" v-model="newAsset.include_in_chart" />
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+
+              <!-- 備註 -->
+              <div class="form-item-row" style="border-bottom: none;">
+                <span class="row-label">備註</span>
+                <input v-model="newAsset.remarks" placeholder="輸入備註" class="input-flat-right text-right" />
+              </div>
+            </div>
+            
+            <div class="form-card-black">
+              <div class="form-item-row" style="border-bottom: none;">
+                <span class="row-label">買入日期</span>
+                <input v-model="newAsset.buy_date" type="date" class="input-flat-right text-right" />
+              </div>
+            </div>
+          </template>
+
+          <!-- Case B: Fixed Amount Cash, Bank, RealEstate, Car, Payable, Loan, Receivables etc. -->
+          <template v-else>
+            <div class="form-card-black">
+              <div class="form-item-row">
+                <span class="row-label">金額</span>
+                <div class="row-value-wrapper">
+                  <input v-model.number="newAsset.balance" type="number" placeholder="0" class="input-flat-right" />
+                  <span class="currency-badge">TWD</span>
+                </div>
+              </div>
+              <div class="form-item-row">
+                <span class="row-label">自定名稱</span>
+                <input v-model="newAsset.name" :placeholder="'自訂名稱，預設為' + translateTypeSettings(newAsset.type)" class="input-flat-right text-right" />
+              </div>
+
+              <!-- 自訂群組 -->
+              <div class="form-item-row" :style="{ borderBottom: existingGroups.length > 0 ? 'none' : '1px solid rgba(255, 255, 255, 0.05)' }">
+                <span class="row-label">自訂群組</span>
+                <input v-model="newAsset.custom_group" placeholder="例: 銀行存款、電子錢包" class="input-flat-right text-right" />
+              </div>
+              <div v-if="existingGroups.length > 0" style="padding: 0 18px 14px 18px; display: flex; flex-wrap: wrap; gap: 8px; border-bottom: 1px solid rgba(255, 255, 255, 0.05); margin-top: -4px;">
+                <button 
+                  v-for="grp in existingGroups" 
+                  :key="grp"
+                  @click.prevent="newAsset.custom_group = grp"
+                  type="button"
+                  style="background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(255, 255, 255, 0.08); color: rgba(255, 255, 255, 0.7); padding: 4px 10px; border-radius: 12px; font-size: 0.75rem; cursor: pointer; transition: all 0.2s; box-shadow: none;"
+                  :style="{
+                    background: newAsset.custom_group === grp ? 'rgba(92, 103, 245, 0.2)' : 'rgba(255, 255, 255, 0.06)',
+                    borderColor: newAsset.custom_group === grp ? '#5c67f5' : 'rgba(255, 255, 255, 0.08)',
+                    color: newAsset.custom_group === grp ? '#ffffff' : 'rgba(255, 255, 255, 0.7)'
+                  }"
+                >
+                  {{ grp }}
+                </button>
+              </div>
+              <div class="form-item-row">
+                <span class="row-label">計入圖表</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" v-model="newAsset.include_in_chart" />
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div class="form-item-row" style="border-bottom: none;">
+                <span class="row-label">備註</span>
+                <input v-model="newAsset.remarks" placeholder="輸入備註" class="input-flat-right text-right" />
+              </div>
+            </div>
+
+            <!-- Auto-Record bar under Case B -->
+            <div class="auto-record-bar-row">
+              <div class="auto-record-left">
+                <PhArrowClockwise size="20" class="auto-record-icon" />
+                <span>自動記</span>
+              </div>
+              <button v-if="!newAsset.auto_record" type="button" class="btn-add-auto-record" @click="initAutoRecord">
+                新增自動記
+              </button>
+              <div v-else class="auto-record-info-badge">
+                <button type="button" class="btn-add-auto-record" @click="addModalStep = 3" style="border-color: #3a59cc; color: #3a59cc;">
+                  {{ newAsset.auto_record.type === 'income' ? '固定收入' : '固定支出' }} 每月{{ newAsset.auto_record.day }}日
+                </button>
+                <button type="button" class="badge-clear-btn" @click="newAsset.auto_record = null">清除</button>
+              </div>
+            </div>
+          </template>
+
+        </div>
+
+        <div v-if="saveError" class="save-error">⚠️ {{ saveError }}</div>
+
+        <!-- Delete Button (Only when editing) -->
+        <div v-if="isEditing" style="padding: 16px; margin-top: 10px;">
+          <button 
+            type="button" 
+            @click="handleDeleteFromEdit" 
+            style="width: 100%; padding: 15px; border-radius: 16px; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.2); color: #ef4444; font-weight: 700; font-size: 0.95rem; cursor: pointer; transition: all 0.2s; box-shadow: none;"
+          >
+            刪除此項目
+          </button>
+        </div>
+      </div>
+
+      <!-- Step 3: Auto-Record Config page -->
+      <div class="modal-content-full" v-else-if="addModalStep === 3">
+        <div class="modal-navbar">
+          <button class="nav-back-circle" @click="addModalStep = 2" title="返回">
+            <PhCaretLeft size="20" weight="bold" />
+          </button>
+          <span class="nav-title">自動記</span>
+          <button class="nav-save-circle" @click="addModalStep = 2" title="確定">
+            <PhCheck size="20" weight="bold" />
+          </button>
+        </div>
+
+        <div class="form-body" v-if="newAsset.auto_record">
+          <!-- Tabs Segmented Control -->
+          <div class="segmented-control" style="background-color: #000000; border-radius: 14px; padding: 4px; display: flex;">
+            <button 
+              type="button" 
+              class="seg-btn active-income" 
+              :class="{ active: newAsset.auto_record.type === 'income' }"
+              style="border-radius: 10px; flex: 1;"
+              @click="newAsset.auto_record.type = 'income'; newAsset.auto_record.target_account_id = null"
+            >
+              固定收入
+            </button>
+            <button 
+              type="button" 
+              class="seg-btn active-expense" 
+              :class="{ active: newAsset.auto_record.type === 'expense' }"
+              style="border-radius: 10px; flex: 1;"
+              @click="newAsset.auto_record.type = 'expense'; newAsset.auto_record.target_account_id = null"
+            >
+              固定支出
+            </button>
+            <button 
+              type="button" 
+              class="seg-btn active-income" 
+              :style="{ background: newAsset.auto_record.type === 'transfer' ? '#3a59cc' : 'transparent' }"
+              :class="{ active: newAsset.auto_record.type === 'transfer' }"
+              style="border-radius: 10px; flex: 1;"
+              @click="newAsset.auto_record.type = 'transfer'"
+            >
+              定期轉帳
+            </button>
+          </div>
+
+          <!-- Card 1 -->
+          <div class="form-card-black">
+            <div class="form-item-row">
+              <div class="row-label-group">
+                <span class="row-label">金額</span>
+                <span class="row-sublabel">TWD</span>
+              </div>
+              <div class="row-value-wrapper">
+                <input v-model.number="newAsset.auto_record.amount" type="number" placeholder="0" class="input-flat-right" />
+                <button type="button" class="minus-circle-btn" @click="newAsset.auto_record.amount = 0">
+                  <PhMinusCircle size="20" weight="bold" />
+                </button>
+              </div>
+            </div>
+            
+            <div class="form-item-row" style="position: relative;">
+              <span class="row-label">記錄日期</span>
+              <div class="row-value-wrapper">
+                <span class="display-val" style="color: rgba(255, 255, 255, 0.6); font-size: 0.95rem; font-weight: 700;">每月{{ newAsset.auto_record.day }}日</span>
+                <PhCaretRight size="16" class="chevron-icon" />
+              </div>
+              <select v-model.number="newAsset.auto_record.day" class="invisible-select">
+                <option v-for="d in 28" :key="d" :value="d">每月{{ d }}日</option>
+              </select>
+            </div>
+
+            <!-- Target Account (Only for Transfer type) -->
+            <div v-if="newAsset.auto_record.type === 'transfer'" class="form-item-row" style="position: relative; border-bottom: none;">
+              <span class="row-label">轉入目標帳戶</span>
+              <div class="row-value-wrapper">
+                <span class="display-val" style="color: #ffffff; font-size: 0.95rem; font-weight: 700;">
+                  {{ accounts.find(a => a.id === newAsset.auto_record.target_account_id)?.name || '請選擇帳戶' }}
+                </span>
+                <PhCaretRight size="16" class="chevron-icon" />
+              </div>
+              <select v-model="newAsset.auto_record.target_account_id" class="invisible-select">
+                <option :value="null" disabled>請選擇帳戶</option>
+                <option 
+                  v-for="acc in accounts.filter(a => a.id !== editingId)" 
+                  :key="acc.id" 
+                  :value="acc.id"
+                >
+                  {{ acc.name }} ({{ translateTypeSettings(acc.type) }})
+                </option>
+              </select>
+            </div>
+
+            <div class="form-item-row" style="border-bottom: none;">
+              <span class="row-label">標籤</span>
+              <input v-model="newAsset.auto_record.tag" placeholder="#輸入標籤" class="input-flat-right text-right red-text red-placeholder" @input="handleTagInput" />
+            </div>
+          </div>
+
+          <div class="next-time-hint">
+            下次記錄時間：{{ nextRecordDateStr }}
+          </div>
+
+          <!-- Card 2 -->
+          <div class="form-card-black">
+            <div class="form-item-row" style="border-bottom: none;">
+              <span class="row-label">有效期</span>
+              <div class="expiry-pill-selector">
+                <button type="button" class="expiry-pill" :class="{ active: newAsset.auto_record.expiry === 'forever' }" @click="newAsset.auto_record.expiry = 'forever'">
+                  永遠
+                </button>
+                <button type="button" class="expiry-pill" :class="{ active: newAsset.auto_record.expiry === 'custom' }" @click="newAsset.auto_record.expiry = 'custom'">
+                  自訂
+                </button>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Step 4: Investment Detail View -->
+      <div class="modal-content-full" v-else-if="addModalStep === 4" style="background: #121214; min-height: 100vh;">
+        <div class="modal-navbar" style="background: #121214; border-bottom: 1px solid rgba(255, 255, 255, 0.05); padding-bottom: 16px;">
+          <!-- Close button X -->
+          <button class="nav-back-circle" @click="closeAddModal()" title="關閉" style="background: #2c2c2e; color: #ffffff; width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center;">
+            <PhMinusCircle size="20" weight="bold" />
+          </button>
+          <span class="nav-title">詳情</span>
+          <!-- Pencil (Edit) in header -->
+          <div style="display: flex; gap: 8px;">
+            <button class="nav-back-circle" @click="editInvestmentBySymbol(selectedSymbol)" title="編輯" style="background: #2c2c2e; color: #ffffff; width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center;">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
+            </button>
+          </div>
+        </div>
+
+        <div v-if="selectedInvestment" class="invest-detail-container" style="padding: 0 8px;">
+          <!-- Stock Header Info (TW/US icon + Name + Symbol) -->
+          <div style="display: flex; align-items: center; gap: 12px; margin-top: 24px;">
+            <!-- Badge Icon for region -->
+            <div class="region-badge-circle" :style="{ background: selectedInvestment.currency === 'USD' ? 'rgba(92,103,245,0.15)' : 'rgba(120,57,236,0.15)', color: selectedInvestment.currency === 'USD' ? '#5c67f5' : '#7839ec', border: selectedInvestment.currency === 'USD' ? '1px solid rgba(92,103,245,0.3)' : '1px solid rgba(120,57,236,0.3)', width: '36px', height: '36px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', fontSize: '0.8rem' }">
+              {{ selectedInvestment.currency === 'USD' ? 'US' : 'TW' }}
+            </div>
+            <div style="display: flex; flex-direction: column; text-align: left;">
+              <span style="color: #ffffff; font-size: 1.25rem; font-weight: 800;">{{ selectedInvestment.name }}</span>
+              <span style="color: #828e9e; font-size: 0.85rem; font-weight: 600; margin-top: 1px;">{{ selectedInvestment.symbol }}</span>
+            </div>
+          </div>
+
+          <!-- Large Balance -->
+          <div style="text-align: left; margin-top: 32px; margin-bottom: 32px;">
+            <div style="color: #ffffff; font-size: 2.5rem; font-weight: 800; font-family: var(--font-display); letter-spacing: -0.02em;">
+              {{ formatInvestCurrency(selectedInvestment.value, selectedInvestment.currency) }}
+            </div>
+          </div>
+
+          <div style="display: flex; gap: 14px; margin-bottom: 36px;">
+            <button class="pill-btn-gray" @click="openAdjustShares()" style="flex: 1; padding: 12px; border-radius: 50px; font-weight: 700; font-size: 0.95rem; background: #2c2c2e; color: #ffffff; border: none; cursor: pointer; transition: background 0.2s;" onmouseover="this.style.background='#3a3a3c'" onmouseout="this.style.background='#2c2c2e'">
+              增減股數
+            </button>
+            <button class="pill-btn-white" @click="openModifyBalance()" style="flex: 1; padding: 12px; border-radius: 50px; font-weight: 700; font-size: 0.95rem; background: #ffffff; color: #121214; border: none; cursor: pointer; transition: opacity 0.2s;" onmouseover="this.style.opacity='0.9'" onmouseout="this.style.opacity='1'">
+              修改餘額
+            </button>
+          </div>
+
+          <!-- Change History List -->
+          <div class="history-section" style="text-align: left;">
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 10px; margin-bottom: 14px;">
+              <span style="color: #828e9e; font-size: 0.9rem; font-weight: 700;">變動記錄</span>
+              <span style="color: #828e9e; font-size: 0.85rem; cursor: pointer; opacity: 0.7;">⚙️</span>
+            </div>
+
+            <!-- List of Lots -->
+            <div style="display: flex; flex-direction: column; gap: 14px;">
+              <div v-for="lot in selectedInvestment.lots" :key="lot.id" class="history-item-row" style="display: flex; justify-content: space-between; align-items: flex-start; padding-bottom: 14px; border-bottom: 1px solid rgba(255,255,255,0.04);">
+                <div style="display: flex; flex-direction: column;">
+                  <span style="color: #ffffff; font-size: 0.95rem; font-weight: 700;">修改餘額</span>
+                  <span style="color: #828e9e; font-size: 0.82rem; margin-top: 4px;">持有 {{ formatInvestNumber(lot.quantity) }}, {{ lot.currency }} {{ formatInvestNumber(lot.buy_price) }}</span>
+                  <span style="color: #60697a; font-size: 0.8rem; margin-top: 4px;">{{ formatDateDetailed(lot.buy_date || lot.created_at) }}</span>
+                </div>
+                <div style="display: flex; flex-direction: column; align-items: flex-end;">
+                  <span style="color: #2ec173; font-size: 0.95rem; font-weight: 700;">+{{ formatHistoryValue(lot.quantity * lot.current_price, lot.currency) }}</span>
+                  <span style="color: #828e9e; font-size: 0.82rem; margin-top: 4px;">餘額 {{ formatHistoryValue(lot.quantity * lot.current_price, lot.currency) }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 5: Adjust Shares View -->
+      <div class="modal-content-full" v-else-if="addModalStep === 5" style="background: #121214; min-height: 100vh; padding: 0 16px; color: #ffffff;">
+        <!-- Header -->
+        <div class="modal-navbar" style="background: #121214; padding-bottom: 16px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255, 255, 255, 0.05);">
+          <button class="nav-back-circle" @click="addModalStep = 4" title="返回" style="background: #2c2c2e; color: #ffffff; width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; border: none; cursor: pointer;">
+            <PhCaretLeft size="20" weight="bold" />
+          </button>
+          <button @click="addModalStep = 4" style="background: none; border: none; color: #ffffff; font-size: 1rem; font-weight: bold; cursor: pointer;">
+            取消
+          </button>
+        </div>
+
+        <div v-if="selectedInvestment" style="text-align: left; margin-top: 16px;">
+          <!-- Title & Symbol -->
+          <div style="font-size: 1.25rem; font-weight: 800; color: #ffffff;">{{ selectedInvestment.name }}</div>
+          <div style="font-size: 0.85rem; color: #828e9e; margin-top: 2px; font-weight: 600;">{{ selectedInvestment.symbol }}</div>
+
+          <!-- Quantity input -->
+          <div style="margin-top: 32px; position: relative;">
+            <div style="font-size: 0.9rem; color: #828e9e; font-weight: 700; margin-bottom: 8px;">股數</div>
+            <div style="display: flex; align-items: baseline; border-bottom: 1px solid rgba(255, 255, 255, 0.1); padding-bottom: 8px;">
+              <input 
+                v-model.number="adjustSharesVal" 
+                type="number" 
+                placeholder="0" 
+                class="reset-input"
+                style="background: transparent; border: none; color: #ffffff; font-size: 3rem; font-weight: 800; width: 100%; outline: none; font-family: var(--font-display); padding: 0 !important; margin: 0 !important;"
+              />
+            </div>
+          </div>
+
+          <!-- Form Fields -->
+          <div style="margin-top: 24px; display: flex; flex-direction: column; gap: 18px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 12px;">
+              <span style="color: #828e9e; font-size: 0.95rem;">備註</span>
+              <input v-model="adjustRemarks" class="reset-input" style="background: transparent; border: none; color: #ffffff; font-size: 0.95rem; text-align: right; outline: none; width: 60%; padding: 0 !important; margin: 0 !important;" />
+            </div>
+
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 12px;">
+              <span style="color: #828e9e; font-size: 0.95rem;">價格</span>
+              <div style="display: flex; align-items: center; gap: 6px;">
+                <span style="background: #2c2c2e; padding: 6px 12px; border-radius: 20px; font-size: 0.85rem; font-weight: bold; color: #ffffff; display: flex; align-items: center;">
+                  {{ selectedInvestment.currency }} 
+                  <input v-model.number="adjustPrice" type="number" step="any" class="reset-input" style="background: transparent; border: none; color: #ffffff; font-size: 0.85rem; font-weight: bold; outline: none; width: 60px; margin-left: 4px; text-align: right; padding: 0 !important; margin: 0 !important;" />
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Plus / Minus Segments -->
+          <div style="display: flex; gap: 12px; margin-top: 32px;">
+            <button 
+              @click="adjustAction = 'plus'"
+              :style="{
+                flex: 1,
+                padding: '16px',
+                borderRadius: '16px',
+                border: 'none',
+                fontSize: '1.5rem',
+                fontWeight: 'bold',
+                cursor: 'pointer',
+                background: adjustAction === 'plus' ? '#2c2c2e' : 'rgba(255,255,255,0.05)',
+                color: '#ffffff',
+                border: adjustAction === 'plus' ? '1px solid rgba(255,255,255,0.15)' : 'none'
+              }"
+            >
+              +
+            </button>
+            <button 
+              @click="adjustAction = 'minus'"
+              :style="{
+                flex: 1,
+                padding: '16px',
+                borderRadius: '16px',
+                border: 'none',
+                fontSize: '1.5rem',
+                fontWeight: 'bold',
+                cursor: 'pointer',
+                background: adjustAction === 'minus' ? '#2c2c2e' : 'rgba(255,255,255,0.05)',
+                color: '#ffffff',
+                border: adjustAction === 'minus' ? '1px solid rgba(255,255,255,0.15)' : 'none'
+              }"
+            >
+              -
+            </button>
+          </div>
+
+          <!-- Live values -->
+          <div style="margin-top: 24px; text-align: left; font-family: var(--font-display);">
+            <div style="font-size: 1.1rem; font-weight: bold; color: #5c67f5;">
+              {{ adjustAction === 'plus' ? '+' : '-' }}{{ formatInvestCurrency((Number(adjustSharesVal || 0) * Number(adjustPrice || 0)), selectedInvestment.currency) }}
+            </div>
+            <div style="font-size: 0.9rem; color: #828e9e; margin-top: 6px; font-weight: 500;">
+              餘額 {{ formatInvestCurrency(Math.max(0, selectedInvestment.quantity + (adjustAction === 'plus' ? Number(adjustSharesVal || 0) : -Number(adjustSharesVal || 0))) * Number(adjustPrice || 0), selectedInvestment.currency) }}
+            </div>
+            <div style="font-size: 0.9rem; color: #828e9e; margin-top: 4px; font-weight: 500;">
+              持有 {{ Math.max(0, selectedInvestment.quantity + (adjustAction === 'plus' ? Number(adjustSharesVal || 0) : -Number(adjustSharesVal || 0))) }}
+            </div>
+          </div>
+
+          <!-- Submit Button -->
+          <button 
+            @click="submitAdjustShares" 
+            :disabled="!adjustSharesVal || adjustSharesVal <= 0"
+            style="width: 100%; padding: 16px; border-radius: 16px; background: #ffffff; color: #121214; border: none; font-weight: bold; font-size: 1.05rem; margin-top: 36px; cursor: pointer; transition: opacity 0.2s;"
+            :style="{ opacity: (!adjustSharesVal || adjustSharesVal <= 0) ? '0.4' : '1' }"
+          >
+            完成
+          </button>
+        </div>
+      </div>
+
+      <!-- Step 6: Modify Balance View -->
+      <div class="modal-content-full" v-else-if="addModalStep === 6" style="background: #121214; min-height: 100vh; padding: 0 16px; color: #ffffff;">
+        <!-- Header -->
+        <div class="modal-navbar" style="background: #121214; padding-bottom: 16px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255, 255, 255, 0.05);">
+          <button class="nav-back-circle" @click="addModalStep = 4" title="返回" style="background: #2c2c2e; color: #ffffff; width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; border: none; cursor: pointer;">
+            <PhCaretLeft size="20" weight="bold" />
+          </button>
+          <button @click="addModalStep = 4" style="background: none; border: none; color: #ffffff; font-size: 1rem; font-weight: bold; cursor: pointer;">
+            取消
+          </button>
+        </div>
+
+        <div v-if="selectedInvestment" style="text-align: left; margin-top: 16px;">
+          <!-- Title & Symbol -->
+          <div style="font-size: 1.25rem; font-weight: 800; color: #ffffff;">{{ selectedInvestment.name }}</div>
+          <div style="font-size: 0.85rem; color: #828e9e; margin-top: 2px; font-weight: 600;">{{ selectedInvestment.symbol }}</div>
+
+          <!-- Quantity input -->
+          <div style="margin-top: 32px; position: relative;">
+            <div style="font-size: 0.9rem; color: #828e9e; font-weight: 700; margin-bottom: 8px;">股數</div>
+            <div style="display: flex; align-items: baseline; border-bottom: 1px solid rgba(255, 255, 255, 0.1); padding-bottom: 8px;">
+              <input 
+                v-model.number="modifySharesVal" 
+                type="number" 
+                placeholder="0" 
+                class="reset-input"
+                style="background: transparent; border: none; color: #ffffff; font-size: 3rem; font-weight: 800; width: 100%; outline: none; font-family: var(--font-display); padding: 0 !important; margin: 0 !important;"
+              />
+            </div>
+          </div>
+
+          <!-- Form Fields -->
+          <div style="margin-top: 24px; display: flex; flex-direction: column; gap: 18px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 12px;">
+              <span style="color: #828e9e; font-size: 0.95rem;">備註</span>
+              <input v-model="modifyRemarks" class="reset-input" style="background: transparent; border: none; color: #ffffff; font-size: 0.95rem; text-align: right; outline: none; width: 60%; padding: 0 !important; margin: 0 !important;" />
+            </div>
+
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 12px;">
+              <span style="color: #828e9e; font-size: 0.95rem;">價格</span>
+              <div style="display: flex; align-items: center; gap: 6px;">
+                <span style="background: #2c2c2e; padding: 6px 12px; border-radius: 20px; font-size: 0.85rem; font-weight: bold; color: #ffffff; display: flex; align-items: center;">
+                  {{ selectedInvestment.currency }} 
+                  <input v-model.number="modifyPrice" type="number" step="any" class="reset-input" style="background: transparent; border: none; color: #ffffff; font-size: 0.85rem; font-weight: bold; outline: none; width: 60px; margin-left: 4px; text-align: right; padding: 0 !important; margin: 0 !important;" />
+                </span>
+              </div>
+            </div>
+
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 12px;">
+              <span style="color: #828e9e; font-size: 0.95rem;">當前餘額</span>
+              <span style="color: #ffffff; font-size: 0.95rem; font-weight: 700; font-family: var(--font-display);">
+                {{ formatInvestCurrency((Number(modifySharesVal || 0) * Number(modifyPrice || 0)), selectedInvestment.currency) }}
+              </span>
+            </div>
+          </div>
+
+          <!-- Submit Button -->
+          <button 
+            @click="submitModifyBalance" 
+            style="width: 100%; padding: 16px; border-radius: 16px; background: #ffffff; color: #121214; border: none; font-weight: bold; font-size: 1.05rem; margin-top: 36px; cursor: pointer; transition: opacity 0.2s;"
+          >
+            完成
+          </button>
         </div>
       </div>
     </div>
+
+    <!-- Floating Bottom Navigation -->
+    <BottomNav v-model:currentTab="currentTab" />
+
   </div>
-  <div class="dashboard-container" v-else style="display: flex; align-items: center; justify-content: center; color: var(--color-text-muted);">
+
+  <div class="dashboard-container loader-container" v-else>
     <div class="loading-spinner"></div>
-    <span style="margin-left: 10px;">資料同步中...</span>
+    <span class="loader-text">同步財務數據中...</span>
   </div>
 </template>
 
 <style scoped>
 .dashboard-container {
-  max-width: 800px;
+  width: 100%;
+  max-width: 100%;
   margin: 0 auto;
-  height: 100%;
+  height: 100vh;
   display: flex;
   flex-direction: column;
-  overflow-y: auto; 
-  padding: 0 1rem 140px 1rem; /* Combined padding including bottom for nav */
+  overflow: hidden;
   position: relative;
-  -webkit-overflow-scrolling: touch;
+  background-color: var(--color-bg);
+  padding: 0;
 }
 
-/* Header Section */
-.dashboard-header {
-  flex-shrink: 0;
-}
-
-.summary-card {
-  padding: 1rem;
-  margin-bottom: 0.8rem;
-}
-.card-gradient {
-  background: linear-gradient(145deg, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.02) 100%);
-  border: 1px solid rgba(255,255,255,0.1);
-  border-radius: 16px;
-}
-
-.summary-header {
+.tab-view-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1.5rem 1.25rem 120px 1.25rem;
   display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: 0.8rem;
+  flex-direction: column;
+  -webkit-overflow-scrolling: touch;
+  max-width: 600px;
+  width: 100%;
+  margin: 0 auto;
+  box-sizing: border-box;
 }
 
-.net-worth-compact {
+.scrollable-settings {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1.5rem 1.25rem 120px 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.loader-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-muted);
+  gap: 12px;
+  height: 100vh;
+}
+
+.loader-text {
+  font-size: 0.9rem;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+}
+
+/* 頂部淨資產 Header */
+.top-balance-header {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  margin-bottom: 2rem;
   text-align: left;
 }
-.net-worth-compact .label { color: var(--color-text-muted); font-size: 0.85rem; }
-.net-worth-compact .amount { font-size: 1.8rem; font-weight: bold; color: var(--color-text); line-height: 1.2; margin-top: 0.2rem; }
+
+.balance-left {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.balance-title {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: var(--color-text);
+  letter-spacing: 0.02em;
+}
 
 .privacy-btn {
   background: none;
@@ -566,138 +3140,1239 @@ onActivated(() => {
   color: var(--color-text-muted);
   cursor: pointer;
   padding: 0 !important;
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  flex: 0 0 auto;
-}
-.privacy-btn:hover { color: var(--color-text); }
-
-/* 圓餅圖獨立一行 */
-.chart-row {
-  width: 100%;
-  margin-bottom: 0.8rem;
-}
-.alloc-chart-wrap {
-  height: 140px;
-  width: 100%;
+  box-shadow: none !important;
 }
 
-.stats-row {
+.privacy-btn:hover {
+  color: var(--color-text);
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.balance-row {
   display: flex;
-  flex-wrap: wrap;
   justify-content: space-between;
-  border-top: 1px solid rgba(255,255,255,0.1);
-  padding-top: 0.8rem;
-  gap: 0.5rem 0;
+  align-items: center;
+  width: 100%;
+  margin-top: 0.25rem;
 }
 
-.stat-item { text-align: center; flex: 1 0 22%; }
-.stat-item label { display: block; color: var(--color-text-muted); font-size: 0.68rem; margin-bottom: 0.1rem; white-space: nowrap; }
-.stat-item .val { font-size: 0.8rem; font-weight: 600; }
-.income { color: var(--color-success); }
-.expense { color: var(--color-danger); }
-.invest { color: #8b5cf6; }
-.assets { color: #3b82f6; }
-.cash { color: var(--color-text); }
+.balance-amount {
+  font-family: var(--font-display);
+  font-size: 2.2rem;
+  font-weight: 800;
+  color: var(--color-text);
+  letter-spacing: -0.02em;
+}
 
+.add-circular-btn {
+  background: #cce3ff;
+  border: none;
+  color: #1e80ff;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: none !important;
+  padding: 0 !important;
+}
 
-.success-text { color: var(--color-success); }
-.danger-text { color: var(--color-danger); }
+.add-circular-btn:hover {
+  background: #b2d5ff;
+  transform: scale(1.05);
+}
 
-/* Analytics Section */
-.analytics-section {
+.add-circular-btn:active {
+  transform: scale(0.95);
+}
+
+/* 側邊彩色佔比條佈局 */
+.main-layout {
+  display: flex;
+  gap: 16px;
+  align-items: stretch;
+}
+
+.left-bar-container {
+  width: 14px;
+  border-radius: 99px;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.03);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+
+.bar-segment {
+  width: 100%;
+  transition: height 0.4s ease;
+}
+.segment-liquid { background-color: #5ebd74; }
+.segment-invest { background-color: #5c67f5; }
+.segment-fixed { background-color: #3a59cc; }
+.segment-receivable { background-color: #8ba4e8; }
+
+.list-column {
+  flex: 1;
   display: flex;
   flex-direction: column;
   gap: 1rem;
-  margin-bottom: 1rem;
 }
 
-.analysis-card {
-  padding: 1.2rem;
-  background: rgba(255,255,255,0.03);
-  border: 1px solid rgba(255,255,255,0.08);
-  border-radius: 16px;
-}
-
-.analysis-card h3 {
-  margin: 0 0 1rem 0;
-  font-size: 1rem;
-  color: var(--color-text);
-  font-weight: 600;
-}
-
-/* Trend Card */
-.trend-grid {
+/* Grouped Card Style */
+.group-card {
+  background: var(--color-card-bg);
+  border-radius: var(--radius-lg);
+  padding: 1.2rem 1.4rem;
+  box-shadow: var(--shadow-md);
   display: flex;
-  gap: 1rem;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid rgba(0, 0, 0, 0.015);
+  text-align: left;
+}
+
+.group-card-header {
+  display: flex;
+  justify-content: space-between;
   align-items: center;
 }
 
-.trend-item {
-  flex: 1;
+.group-title {
+  font-size: 1.15rem;
+  font-weight: 800;
+  color: var(--color-text);
 }
 
-.trend-label {
-  display: block;
+.group-value {
+  font-family: var(--font-display);
+  font-size: 1.3rem;
+  font-weight: 800;
+  color: var(--color-text);
+  letter-spacing: -0.01em;
+}
+
+.group-card-body {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+}
+
+.group-subtitle {
+  font-size: 0.78rem;
+  color: var(--color-text-muted);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 70%;
+}
+
+.group-date {
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+  opacity: 0.85;
+}
+
+.border-red-accent {
+  border-left: 4px solid var(--color-danger);
+}
+.text-red { color: var(--color-danger) !important; }
+.text-receivable-color { color: #567ef5 !important; }
+
+/* Unified Grouped Card Styles */
+.group-wrapper {
+  background: #ffffff;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+  border: 1px solid rgba(0, 0, 0, 0.015);
+}
+
+.group-header-card {
+  padding: 1.1rem 1.4rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: white;
+}
+
+.group-title-text {
+  font-size: 1.15rem;
+  font-weight: 800;
+}
+
+.group-value-text {
+  font-family: var(--font-display);
+  font-size: 1.3rem;
+  font-weight: 800;
+}
+
+.group-body {
+  padding: 0.5rem 1.4rem 1.1rem 1.4rem;
+  display: flex;
+  flex-direction: column;
+}
+
+.group-collapsed-body {
+  padding: 12px 20px;
+  text-align: left;
   font-size: 0.8rem;
   color: var(--color-text-muted);
-  margin-bottom: 0.3rem;
-  white-space: nowrap;
 }
 
-.trend-val {
-  font-size: 1.4rem;
-  font-weight: bold;
+/* Background Color Modifiers */
+.bg-liquid { background: #5ebd74 !important; }
+.bg-invest { background: #5c67f5 !important; }
+.bg-fixed { background: #3a59cc !important; }
+.bg-receivable { background: #8ba4e8 !important; }
+.bg-liab { background: #e03b54 !important; }
+
+.sub-item-card {
   display: flex;
   align-items: center;
-  gap: 0.3rem;
-  margin-bottom: 0.2rem;
-  white-space: nowrap;
+  gap: 12px;
+  padding: 12px 0;
+  border-top: 1px solid rgba(0, 0, 0, 0.035);
 }
 
-.trend-subtext {
-  font-size: 0.75rem;
+.sub-item-card:first-child {
+  border-top: none;
+}
+
+.sub-item-badge {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: rgba(92, 103, 245, 0.06);
+  color: #5c67f5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-display);
+  font-size: 0.76rem;
+  font-weight: 800;
+  flex-shrink: 0;
+}
+
+.sub-item-info {
+  flex: 1;
+  text-align: left;
+}
+
+.sub-item-name {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.sub-item-desc {
+  font-size: 0.72rem;
   color: var(--color-text-muted);
-  white-space: nowrap;
+  margin-top: 2px;
+  font-weight: 500;
 }
 
-.compact-trends {
+.sub-item-right {
+  text-align: right;
+}
+
+.sub-item-val {
+  font-family: var(--font-display);
+  font-size: 1rem;
+  font-weight: 800;
+  color: var(--color-text);
+}
+
+.sub-item-date {
+  font-size: 0.68rem;
+  color: var(--color-text-muted);
+  margin-top: 2px;
+  opacity: 0.8;
+}
+
+/* 歷史趨勢走勢圖 */
+.flex-grow-trend {
+  justify-content: center;
+}
+
+.trend-card {
+  padding: 1.5rem;
+  background: var(--color-card-bg);
+  border: 1px solid rgba(0,0,0,0.015);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  text-align: left;
+}
+
+.trend-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1.5rem;
+}
+
+.trend-section-title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 800;
+}
+
+.time-selector {
+  display: flex;
+  background: rgba(0, 0, 0, 0.03);
+  border-radius: 8px;
+  padding: 2px;
+}
+
+.time-btn {
+  background: transparent;
+  border: none;
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: none !important;
+}
+
+.time-btn.active {
+  background: #ffffff;
+  color: var(--color-primary);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05) !important;
+}
+
+.chart-container {
+  position: relative;
+  height: 260px;
+  width: 100%;
+}
+
+/* 管理設定頁面 */
+.settings-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
+  text-align: left;
+}
+.settings-header-row h3 { margin: 0; font-size: 1.1rem; font-weight: 800; }
+
+.icon-text-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: #ffffff;
+  border: 1px solid rgba(0,0,0,0.08);
+  color: var(--color-text-muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: 20px;
+  box-shadow: none !important;
+}
+.icon-text-btn:hover { color: var(--color-text); border-color: rgba(0,0,0,0.15); }
+.spin { animation: rotate 1s linear infinite; }
+
+.settings-section {
+  text-align: left;
+}
+.settings-section .section-title {
+  margin: 0 0 1rem 0;
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.settings-table-list {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
-  border-left: 1px solid rgba(255,255,255,0.1);
-  padding-left: 1rem;
+  gap: 10px;
 }
 
-.sub-trend {
-  font-size: 0.85rem;
+.settings-table-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.04);
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+  border-radius: 8px;
+}
+.settings-table-item:hover {
+  background-color: rgba(0, 0, 0, 0.03);
+}
+.settings-table-item:last-child { border-bottom: none; }
+
+.item-meta { display: flex; flex-direction: column; gap: 2px; }
+.item-name { font-size: 0.88rem; font-weight: 700; color: var(--color-text); }
+.item-type-badge { font-size: 0.7rem; color: var(--color-text-muted); font-weight: 600; }
+
+.item-right-wrap { display: flex; align-items: center; gap: 12px; }
+.item-value { font-family: var(--font-display); font-size: 0.95rem; font-weight: 700; color: var(--color-text); }
+
+.delete-btn {
+  background: transparent;
+  border: none;
   color: var(--color-text-muted);
-  white-space: nowrap;
+  padding: 6px;
+  cursor: pointer;
+  border-radius: 6px;
+  box-shadow: none !important;
+  opacity: 0.4;
+  transition: all 0.2s ease;
+}
+.delete-btn:hover { opacity: 1; color: var(--color-danger); background: rgba(224, 59, 84, 0.06); }
+
+.settings-empty { font-size: 0.82rem; color: var(--color-text-muted); text-align: center; padding: 1.5rem 0; opacity: 0.7; }
+
+/* Unified Add Modal */
+.modal-overlay {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: #121214;
+  z-index: 2000;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.modal-navbar {
+  display: grid;
+  grid-template-columns: 40px 1fr 40px;
+  align-items: center;
+  width: 100%;
+  padding: 16px 18px;
+  background: #121214;
+  position: sticky;
+  top: 0;
+  z-index: 2010;
+  box-sizing: border-box;
+}
+
+.nav-back-circle {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: #2c2c2e;
+  border: none;
+  color: #ffffff;
   display: flex;
   align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0 !important;
+  box-shadow: none !important;
+  transition: background 0.2s ease;
 }
 
-.large-chart {
-  position: relative;
-  height: 200px;
+.nav-back-circle:hover {
+  background: #3a3a3c;
+}
+
+.nav-title {
+  color: #ffffff;
+  font-size: 1.15rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.nav-placeholder {
+  width: 36px;
+  height: 36px;
+}
+
+.modal-content-full {
   width: 100%;
+  max-width: 600px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  padding: 0 18px 40px 18px;
+  box-sizing: border-box;
+}
+
+.cat-blocks-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  margin-top: 8px;
+}
+
+.cat-group-wrapper {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+.cat-block-btn {
+  width: 100%;
+  height: 52px;
+  border-radius: 16px;
+  border: none;
+  padding: 0 20px;
+  font-size: 1.05rem;
+  font-weight: 800;
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  transition: all 0.2s ease;
+  box-shadow: none !important;
+  box-sizing: border-box;
+}
+
+.cat-block-btn:hover {
+  filter: brightness(1.05);
+}
+
+.cat-block-btn:active {
+  transform: scale(0.99);
+}
+
+/* Category colors matching Percento */
+.block-liquid { background-color: #2ebd59 !important; color: #121212 !important; }
+.block-invest { background-color: #5c67f5 !important; color: #121212 !important; }
+.block-fixed { background-color: #3a59cc !important; color: #121212 !important; }
+.block-receivable { background-color: #8ba4e8 !important; color: #121212 !important; }
+.block-liab { background-color: #ccd7f5 !important; color: #121212 !important; }
+
+/* Accordion panels */
+.accordion-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  margin-bottom: 4px;
+}
+
+.sub-type-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #1c1c1e !important;
+  border: none;
+  border-radius: 16px;
+  height: 54px;
+  padding: 0 20px;
+  width: 100%;
+  color: #ffffff;
+  cursor: pointer;
+  box-shadow: none !important;
+  transition: background 0.2s ease;
+  box-sizing: border-box;
+}
+
+.sub-type-item:hover {
+  background: #2c2c2e !important;
+}
+
+.sub-item-left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.sub-icon {
+  flex-shrink: 0;
+}
+
+.chevron-icon {
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.text-green { color: #2ebd59 !important; }
+.text-purple { color: #8c96f8 !important; }
+.text-blue { color: #3a59cc !important; }
+.text-light-blue { color: #8ba4e8 !important; }
+.text-gray-blue { color: #ccd7f5 !important; }
+
+/* Form fields styling */
+.form-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 12px;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: left;
+}
+
+.form-group label {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.5);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding-left: 4px;
+}
+
+.form-row-group {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.modal-overlay input:not(.reset-input):not(.input-flat-right),
+.modal-overlay select:not(.select-flat-right) {
+  background: #1c1c1e !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  color: #ffffff !important;
+  border-radius: 12px !important;
+  padding: 12px 14px !important;
+  font-size: 0.95rem !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+  margin-bottom: 0 !important;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease !important;
+}
+
+.modal-overlay input:not(.reset-input):not(.input-flat-right):focus,
+.modal-overlay select:not(.select-flat-right):focus {
+  outline: none !important;
+  border-color: var(--focused-color, #5c67f5) !important;
+  box-shadow: 0 0 0 3px rgba(92, 103, 245, 0.15) !important;
+}
+
+.save-error {
+  font-size: 0.82rem;
+  color: #ff453a;
+  background: rgba(255, 69, 58, 0.1);
+  border-radius: 8px;
+  padding: 10px 14px;
+  text-align: left;
+  margin-top: 12px;
+  border: 1px solid rgba(255, 69, 58, 0.15);
+}
+
+.modal-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+.modal-actions button {
+  flex: 1;
+  height: 48px;
+  font-size: 0.95rem;
+  font-weight: 700;
+  border-radius: 14px;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: none !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn-cancel {
+  background: #2c2c2e !important;
+  color: #ffffff !important;
+}
+
+.btn-cancel:hover {
+  background: #3a3a3c !important;
+}
+
+.btn-save {
+  transition: filter 0.2s ease, transform 0.1s ease !important;
+}
+
+.btn-save:hover {
+  filter: brightness(1.1);
+}
+
+.btn-save:active {
+  transform: scale(0.98);
+}
+
+.empty-state {
+  height: 180px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-muted);
+  border: 1px dashed rgba(0, 0, 0, 0.08);
+  background: rgba(0, 0, 0, 0.01);
+  border-radius: var(--radius-lg);
+  padding: 1.5rem;
+  text-align: center;
 }
 
 .loading-spinner {
   width: 24px;
   height: 24px;
-  border: 3px solid rgba(255, 255, 255, 0.1);
-  border-top: 3px solid var(--color-primary);
+  border: 2px solid rgba(0, 0, 0, 0.05);
+  border-top: 2px solid var(--color-primary);
   border-radius: 50%;
   animation: spin 1s linear infinite;
+}
+
+/* Transitions */
+.accordion-slide-enter-active { transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1); }
+.accordion-slide-leave-active { transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
+.accordion-slide-enter-from, .accordion-slide-leave-to {
+  opacity: 0;
+  transform: translateY(-8px);
+  max-height: 0;
 }
 
 @keyframes spin {
   0% { transform: rotate(0deg); }
   100% { transform: rotate(360deg); }
+}
+
+@keyframes rotate { to { transform: rotate(360deg); } }
+
+/* Toast Notification styling */
+.app-toast {
+  position: fixed;
+  top: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3000;
+  background: rgba(30, 30, 32, 0.95);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(255,255,255,0.08);
+  color: white;
+  padding: 12px 24px;
+  border-radius: 50px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  max-width: 90%;
+  text-align: center;
+  animation: slideDown 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes slideDown {
+  from { opacity: 0; transform: translate(-50%, -20px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+/* Dark Card Form Styles */
+.form-card-black {
+  background: #1c1c1e;
+  border-radius: 16px;
+  padding: 0 16px;
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 20px;
+}
+
+.form-item-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.row-label {
+  color: #ffffff;
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+.row-value-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.input-flat-right {
+  background: transparent !important;
+  border: none !important;
+  color: #ffffff !important;
+  text-align: right !important;
+  font-size: 0.95rem !important;
+  width: 200px !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+  height: 24px !important;
+  line-height: 24px !important;
+}
+
+.select-flat-right {
+  background: transparent !important;
+  border: none !important;
+  color: #ffffff !important;
+  text-align: right !important;
+  font-size: 0.95rem !important;
+  width: auto !important;
+  padding: 0 20px 0 0 !important;
+  box-shadow: none !important;
+  outline: none !important;
+  appearance: none;
+  border-radius: 0 !important;
+}
+
+.currency-badge {
+  background: #ffffff;
+  color: #121212;
+  padding: 4px 8px;
+  border-radius: 20px;
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+/* iOS Toggle Switch */
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 48px;
+  height: 28px;
+}
+
+.toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background-color: #3a3a3c;
+  transition: .3s;
+  border-radius: 34px;
+}
+
+.toggle-slider:before {
+  position: absolute;
+  content: "";
+  height: 22px;
+  width: 22px;
+  left: 3px;
+  bottom: 3px;
+  background-color: white;
+  transition: .3s;
+  border-radius: 50%;
+}
+
+.toggle-switch input:checked + .toggle-slider {
+  background-color: #2ebd59;
+}
+
+.toggle-switch input:checked + .toggle-slider:before {
+  transform: translateX(20px);
+}
+
+/* Auto-record Dashboard components */
+.auto-record-bar-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 4px 16px 4px;
+}
+
+.auto-record-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #ffffff;
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+.auto-record-icon {
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.btn-add-auto-record {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  color: #ffffff;
+  padding: 6px 14px;
+  border-radius: 20px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: none !important;
+}
+
+.btn-add-auto-record:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.6);
+}
+
+.auto-record-info-badge {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.badge-text {
+  color: #2ebd59;
+  font-size: 0.85rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.badge-text:hover {
+  text-decoration: underline;
+}
+
+.badge-clear-btn {
+  background: transparent;
+  border: none;
+  color: #ff453a;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 4px 8px;
+  box-shadow: none !important;
+}
+
+.badge-clear-btn:hover {
+  text-decoration: underline;
+}
+
+.auto-record-info-card {
+  display: flex;
+  gap: 10px;
+  background: #1c1c1e;
+  border-radius: 16px;
+  padding: 16px;
+  align-items: flex-start;
+}
+
+.info-icon {
+  color: rgba(255, 255, 255, 0.4);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.info-text {
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 0.8rem;
+  line-height: 1.4;
+  text-align: left;
+}
+
+/* Segmented Control (Tabs) */
+.segmented-control {
+  display: flex;
+  background: #1c1c1e;
+  border-radius: 12px;
+  padding: 4px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.seg-btn {
+  flex: 1;
+  border: none;
+  background: transparent !important;
+  color: rgba(255, 255, 255, 0.6) !important;
+  font-size: 0.95rem;
+  font-weight: 700;
+  height: 38px;
+  border-radius: 9px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: none !important;
+}
+
+.seg-btn.active-income.active {
+  background: #2ebd59 !important;
+  color: #ffffff !important;
+}
+
+.seg-btn.active-expense.active {
+  background: #3a59cc !important;
+  color: #ffffff !important;
+}
+
+/* Expiry pill selector */
+.expiry-pill-selector {
+  display: flex;
+  gap: 8px;
+}
+
+.expiry-pill {
+  border: none;
+  border-radius: 8px;
+  height: 32px;
+  padding: 0 16px !important;
+  font-size: 0.85rem !important;
+  font-weight: 700 !important;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: none !important;
+  background: transparent !important;
+  color: #ffffff !important;
+  border: 1px solid #ffffff !important;
+}
+
+.expiry-pill.active {
+  background: #e2eeff !important;
+  color: #0056d6 !important;
+  border: 1px solid #e2eeff !important;
+}
+
+/* Minus circle button style */
+.minus-circle-btn {
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.6);
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.2s ease;
+  box-shadow: none !important;
+}
+
+.minus-circle-btn:hover {
+  color: #ffffff;
+}
+
+/* Invisible select overlay style */
+.invisible-select {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+  z-index: 2;
+}
+
+/* Label grouping for amount */
+.row-label-group {
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+}
+
+.row-sublabel {
+  font-size: 0.72rem;
+  color: rgba(255, 255, 255, 0.4);
+  font-weight: 500;
+  margin-top: 2px;
+}
+
+/* Date and Tag styles */
+.next-time-hint {
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.4);
+  text-align: right;
+  margin-top: -8px;
+  margin-bottom: 8px;
+  padding-right: 8px;
+}
+
+.red-placeholder::placeholder {
+  color: #ff453a !important;
+}
+
+.red-text {
+  color: #ff453a !important;
+  font-weight: 700;
+}
+
+/* Header and Navbar layout */
+.provider-type-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 6px;
+  margin-bottom: 8px;
+}
+
+.row-label-gray {
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+.provider-type-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.provider-type-text {
+  color: #ffffff;
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+.nav-save-circle {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: #2c2c2e;
+  border: none;
+  color: #2ebd59;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0 !important;
+  box-shadow: none !important;
+  transition: background 0.2s ease;
+}
+
+.nav-save-circle:hover {
+  background: #3a3a3c;
+}
+
+.mini-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.1);
+  border-top: 2px solid #2ebd59;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.caret-indicator {
+  color: var(--color-text-muted);
+  transition: transform 0.2s ease;
+}
+.caret-indicator-white {
+  color: #ffffff;
+  transition: transform 0.2s ease;
+}
+
+.list-sub-item-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 0;
+  border-top: 1px solid rgba(0, 0, 0, 0.04);
+  transition: opacity 0.2s ease;
+}
+.list-sub-item-card:hover {
+  opacity: 0.8;
+}
+.list-sub-item-card:first-child {
+  border-top: none;
+}
+
+.sub-item-right-val {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Treemap styling matching the screenshot */
+.treemap-container {
+  display: flex;
+  gap: 12px;
+  height: calc(100vh - 200px);
+  width: 100%;
+  margin-top: 16px;
+  box-sizing: border-box;
+}
+
+.treemap-column {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.treemap-left {
+  width: 30%;
+}
+
+.treemap-right {
+  width: 70%;
+  gap: 4px;
+}
+
+.treemap-full {
+  width: 100%;
+  gap: 4px;
+}
+
+.treemap-spacer {
+  transition: flex 0.3s ease;
+}
+
+.treemap-block {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 12px 16px;
+  box-sizing: border-box;
+  border-radius: 20px;
+  transition: flex 0.3s ease;
+  text-align: left;
+  overflow: hidden;
+  min-height: 60px; /* Prevent text clipping */
+}
+
+.block-pct {
+  font-size: 1.8rem;
+  font-weight: 800;
+  font-family: var(--font-display);
+  line-height: 1.1;
+}
+
+.block-name {
+  font-size: 0.85rem;
+  font-weight: 700;
+  margin-top: 2px;
+  opacity: 0.9;
+}
+
+.block-liab-val {
+  background-color: #ccd7f5;
+  color: #121212;
+}
+
+.block-invest-val {
+  background-color: #5c67f5;
+  color: #ffffff;
+}
+
+.block-liquid-val {
+  background-color: #5ebd74;
+  color: #ffffff;
+}
+
+.block-fixed-val {
+  background-color: #3a59cc;
+  color: #ffffff;
+}
+
+.block-receivable-val {
+  background-color: #8ba4e8;
+  color: #121212;
 }
 </style>
