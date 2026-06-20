@@ -1845,7 +1845,10 @@ const processAutoRecords = async () => {
 }
 
 // ── Custom Group Management ──────────────────────────────────────
-const customGroupsList = ref(JSON.parse(localStorage.getItem('custom_groups') || '["台股", "美股", "流動資產"]'))
+const customAccountGroupsList = ref(JSON.parse(localStorage.getItem('custom_account_groups') || '["流動資產", "固定資產"]'))
+const customInvestGroupsList = ref(JSON.parse(localStorage.getItem('custom_invest_groups') || '["台股", "美股"]'))
+
+const activeGroupType = ref('account') // 'account' or 'invest'
 
 const investGroupsExpanded = ref({})
 
@@ -1863,59 +1866,68 @@ const isInvestGroupExpanded = (groupName) => {
 
 
 const syncGroups = () => {
-  const dbGroups = new Set()
+  const dbAccountGroups = new Set()
+  const dbInvestGroups = new Set()
+  
   if (Array.isArray(accounts.value)) {
-    accounts.value.forEach(a => { if (a.custom_group && a.custom_group.trim()) dbGroups.add(a.custom_group.trim()) })
+    accounts.value.forEach(a => { if (a.custom_group && a.custom_group.trim()) dbAccountGroups.add(a.custom_group.trim()) })
   }
   if (Array.isArray(investments.value)) {
-    investments.value.forEach(i => { if (i.custom_group && i.custom_group.trim()) dbGroups.add(i.custom_group.trim()) })
+    investments.value.forEach(i => { if (i.custom_group && i.custom_group.trim()) dbInvestGroups.add(i.custom_group.trim()) })
   }
   
-  const localGroups = JSON.parse(localStorage.getItem('custom_groups') || '["台股", "美股", "流動資產"]')
-  const merged = Array.from(new Set([...localGroups, ...dbGroups]))
-  localStorage.setItem('custom_groups', JSON.stringify(merged))
-  customGroupsList.value = merged
+  const localAccountGroups = JSON.parse(localStorage.getItem('custom_account_groups') || '["流動資產", "固定資產"]')
+  const mergedAccount = Array.from(new Set([...localAccountGroups, ...dbAccountGroups]))
+  localStorage.setItem('custom_account_groups', JSON.stringify(mergedAccount))
+  customAccountGroupsList.value = mergedAccount
+
+  const localInvestGroups = JSON.parse(localStorage.getItem('custom_invest_groups') || '["台股", "美股"]')
+  const mergedInvest = Array.from(new Set([...localInvestGroups, ...dbInvestGroups]))
+  localStorage.setItem('custom_invest_groups', JSON.stringify(mergedInvest))
+  customInvestGroupsList.value = mergedInvest
 }
 
-const getGroupMemberCount = (groupName) => {
-  return getGroupMembers(groupName).length
+const getGroupMemberCount = (groupName, type) => {
+  return getGroupMembers(groupName, type).length
 }
 
-const getGroupMembers = (groupName) => {
-  const accs = (accounts.value || []).filter(a => a.custom_group === groupName).map(a => ({ id: a.id, name: a.name, type: 'account' }))
-  const invs = (investments.value || []).filter(i => i.custom_group === groupName).map(i => ({ id: i.id, name: `${i.symbol} (${i.name || ''})`, type: 'investment' }))
-  return [...accs, ...invs]
+const getGroupMembers = (groupName, type) => {
+  if (type === 'account') {
+    return (accounts.value || []).filter(a => a.custom_group === groupName).map(a => ({ id: a.id, name: a.name, type: 'account' }))
+  } else {
+    return (investments.value || []).filter(i => i.custom_group === groupName).map(i => ({ id: i.id, name: `${i.symbol} (${i.name || ''})`, type: 'investment' }))
+  }
 }
 
-const deleteGroup = (groupName) => {
+const deleteGroup = (groupName, type) => {
   triggerDeleteConfirm(`確定要刪除群組「${groupName}」嗎？群組內的資產與投資將設為無群組，不會刪除實際資料。`, async () => {
-    // Remove group from accounts
-    accounts.value = accounts.value.map(a => {
-      if (a.custom_group === groupName) {
-        a.custom_group = ''
-        if (a.id && !String(a.id).startsWith('local-') && !String(a.id).startsWith('mock-')) {
-          supabase.from('accounts').update({ custom_group: '' }).eq('id', a.id)
+    if (type === 'account') {
+      accounts.value = accounts.value.map(a => {
+        if (a.custom_group === groupName) {
+          a.custom_group = ''
+          if (a.id && !String(a.id).startsWith('local-') && !String(a.id).startsWith('mock-')) {
+            supabase.from('accounts').update({ custom_group: '' }).eq('id', a.id)
+          }
         }
-      }
-      return a
-    })
-    localStorage.setItem('local_accounts', JSON.stringify(accounts.value))
-
-    // Remove group from investments
-    investments.value = investments.value.map(i => {
-      if (i.custom_group === groupName) {
-        i.custom_group = ''
-        if (i.id && !String(i.id).startsWith('local-') && !String(i.id).startsWith('mock-')) {
-          supabase.from('investments').update({ custom_group: '' }).eq('id', i.id)
+        return a
+      })
+      localStorage.setItem('local_accounts', JSON.stringify(accounts.value))
+      customAccountGroupsList.value = customAccountGroupsList.value.filter(g => g !== groupName)
+      localStorage.setItem('custom_account_groups', JSON.stringify(customAccountGroupsList.value))
+    } else {
+      investments.value = investments.value.map(i => {
+        if (i.custom_group === groupName) {
+          i.custom_group = ''
+          if (i.id && !String(i.id).startsWith('local-') && !String(i.id).startsWith('mock-')) {
+            supabase.from('investments').update({ custom_group: '' }).eq('id', i.id)
+          }
         }
-      }
-      return i
-    })
-    localStorage.setItem('local_investments', JSON.stringify(investments.value))
-
-    // Remove from local customGroupsList
-    customGroupsList.value = customGroupsList.value.filter(g => g !== groupName)
-    localStorage.setItem('custom_groups', JSON.stringify(customGroupsList.value))
+        return i
+      })
+      localStorage.setItem('local_investments', JSON.stringify(investments.value))
+      customInvestGroupsList.value = customInvestGroupsList.value.filter(g => g !== groupName)
+      localStorage.setItem('custom_invest_groups', JSON.stringify(customInvestGroupsList.value))
+    }
   })
 }
 
@@ -1923,7 +1935,8 @@ const deleteGroup = (groupName) => {
 const showCreateGroupModal = ref(false)
 const newGroupName = ref('')
 
-const openCreateGroupModal = () => {
+const openCreateGroupModal = (type) => {
+  activeGroupType.value = type
   newGroupName.value = ''
   showCreateGroupModal.value = true
 }
@@ -1931,12 +1944,13 @@ const openCreateGroupModal = () => {
 const submitCreateGroup = () => {
   const name = newGroupName.value.trim()
   if (!name) return
-  if (customGroupsList.value.includes(name)) {
+  const list = activeGroupType.value === 'account' ? customAccountGroupsList : customInvestGroupsList
+  if (list.value.includes(name)) {
     alert('群組名稱已存在')
     return
   }
-  customGroupsList.value.push(name)
-  localStorage.setItem('custom_groups', JSON.stringify(customGroupsList.value))
+  list.value.push(name)
+  localStorage.setItem(activeGroupType.value === 'account' ? 'custom_account_groups' : 'custom_invest_groups', JSON.stringify(list.value))
   showCreateGroupModal.value = false
 }
 
@@ -1945,16 +1959,19 @@ const showManageGroupModal = ref(false)
 const selectedGroupToManage = ref('')
 const selectedItemToAddToGroup = ref('')
 
-const manageGroup = (groupName) => {
+const manageGroup = (groupName, type) => {
+  activeGroupType.value = type
   selectedGroupToManage.value = groupName
   selectedItemToAddToGroup.value = ''
   showManageGroupModal.value = true
 }
 
 const getAvailableItemsForGroup = computed(() => {
-  const accs = (accounts.value || []).filter(a => a.custom_group !== selectedGroupToManage.value).map(a => ({ id: a.id, name: `🏦 ${a.name} (${translateTypeSettings(a.type)})`, type: 'account' }))
-  const invs = (investments.value || []).filter(i => i.custom_group !== selectedGroupToManage.value).map(i => ({ id: i.id, name: `📈 ${i.symbol} (${i.name || ''})`, type: 'investment' }))
-  return [...accs, ...invs]
+  if (activeGroupType.value === 'account') {
+    return (accounts.value || []).filter(a => a.custom_group !== selectedGroupToManage.value).map(a => ({ id: a.id, name: `🏦 ${a.name} (${translateTypeSettings(a.type)})`, type: 'account' }))
+  } else {
+    return (investments.value || []).filter(i => i.custom_group !== selectedGroupToManage.value).map(i => ({ id: i.id, name: `📈 ${i.symbol} (${i.name || ''})`, type: 'investment' }))
+  }
 })
 
 const addItemToGroup = async () => {
@@ -2013,6 +2030,24 @@ const removeItemFromGroup = async (id, type) => {
     localStorage.setItem('local_investments', JSON.stringify(investments.value))
   }
 }
+
+// ── 數據維護與重置 ──────────────────────────────────────────────────
+const clearNetWorthHistory = () => {
+  triggerDeleteConfirm('確定要清空所有歷史淨資產紀錄嗎？此動作將無法還原，且趨勢圖將重新以目前的淨資產開始累積。', async () => {
+    localStorage.removeItem('net_worth_history')
+    try {
+      const { error } = await supabase.from('net_worth_history').delete().neq('amount', -999999)
+      if (error) console.warn('Supabase clear history failed:', error)
+    } catch (e) {
+      console.warn('Supabase clear history exception:', e)
+    }
+    historyRecords.value = []
+    await saveDailySnapshot(netWorth.value)
+    await fetchHistoryData()
+    showToast('歷史淨資產紀錄已成功重置')
+  })
+}
+
 
 onMounted(() => {
   fetchAllData()
@@ -2500,7 +2535,7 @@ onActivated(() => {
     </div>
 
     <!-- ── 3. 資料管理視圖 (Settings Tab) ────────────────────────────── -->
-    <div v-if="currentTab === 'settings'" class="tab-view-content scrollable-settings">
+    <div v-if="currentTab === 'settings'" class="tab-view-content" style="gap: 1rem;">
       <div class="settings-header-row">
         <h3>管理所有原始帳目</h3>
         <button class="icon-text-btn" @click="refreshPrices" :disabled="isRefreshing">
@@ -2549,30 +2584,57 @@ onActivated(() => {
         <div v-else class="settings-empty">目前尚無投資資料</div>
       </div>
 
-      <!-- Custom Groups Table List -->
+      <!-- Custom Account Groups Table List -->
       <div class="settings-section card" style="margin-top: 1rem;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.8rem;">
-          <h4 class="section-title" style="margin: 0;">🏷️ 自訂群組管理</h4>
-          <button class="icon-text-btn" @click="openCreateGroupModal" style="padding: 4px 10px; font-size: 0.8rem; background: var(--color-primary); color: white; border-radius: 8px; display: flex; align-items: center; gap: 4px; border: none; cursor: pointer;">
+          <h4 class="section-title" style="margin: 0;">🏦 自訂帳戶群組管理</h4>
+          <button class="icon-text-btn" @click="openCreateGroupModal('account')" style="padding: 4px 10px; font-size: 0.8rem; background: var(--color-primary); color: white; border-radius: 8px; display: flex; align-items: center; gap: 4px; border: none; cursor: pointer;">
             <PhPlus size="14" />
             <span>新增群組</span>
           </button>
         </div>
-        <div class="settings-table-list" v-if="customGroupsList.length > 0">
-          <div v-for="grp in customGroupsList" :key="grp" class="settings-table-item" @click="manageGroup(grp)">
+        <div class="settings-table-list" v-if="customAccountGroupsList.length > 0">
+          <div v-for="grp in customAccountGroupsList" :key="grp" class="settings-table-item" @click="manageGroup(grp, 'account')">
             <div class="item-meta">
               <span class="item-name">{{ grp }}</span>
-              <span class="item-type-badge">{{ getGroupMemberCount(grp) }} 個項目</span>
+              <span class="item-type-badge">{{ getGroupMemberCount(grp, 'account') }} 個項目</span>
             </div>
             <div class="item-right-wrap">
-              <button class="delete-btn" @click.stop="deleteGroup(grp)" title="刪除">
+              <button class="delete-btn" @click.stop="deleteGroup(grp, 'account')" title="刪除">
                 <PhTrash size="16" />
               </button>
             </div>
           </div>
         </div>
-        <div v-else class="settings-empty">目前尚無自訂群組</div>
+        <div v-else class="settings-empty">目前尚無自訂帳戶群組</div>
       </div>
+
+      <!-- Custom Invest Groups Table List -->
+      <div class="settings-section card" style="margin-top: 1rem;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.8rem;">
+          <h4 class="section-title" style="margin: 0;">📈 自訂投資群組管理</h4>
+          <button class="icon-text-btn" @click="openCreateGroupModal('invest')" style="padding: 4px 10px; font-size: 0.8rem; background: var(--color-primary); color: white; border-radius: 8px; display: flex; align-items: center; gap: 4px; border: none; cursor: pointer;">
+            <PhPlus size="14" />
+            <span>新增群組</span>
+          </button>
+        </div>
+        <div class="settings-table-list" v-if="customInvestGroupsList.length > 0">
+          <div v-for="grp in customInvestGroupsList" :key="grp" class="settings-table-item" @click="manageGroup(grp, 'invest')">
+            <div class="item-meta">
+              <span class="item-name">{{ grp }}</span>
+              <span class="item-type-badge">{{ getGroupMemberCount(grp, 'invest') }} 個項目</span>
+            </div>
+            <div class="item-right-wrap">
+              <button class="delete-btn" @click.stop="deleteGroup(grp, 'invest')" title="刪除">
+                <PhTrash size="16" />
+              </button>
+            </div>
+          </div>
+        </div>
+        <div v-else class="settings-empty">目前尚無自訂投資群組</div>
+      </div>
+
+
 
       <!-- Bottom spacer to prevent overlap with floating BottomNav -->
       <div style="height: 110px; flex-shrink: 0;"></div>
@@ -2886,7 +2948,7 @@ onActivated(() => {
                 </div>
                 <select v-model="newAsset.custom_group" class="invisible-select">
                   <option value="">無群組</option>
-                  <option v-for="grp in customGroupsList" :key="grp" :value="grp">{{ grp }}</option>
+                  <option v-for="grp in customAccountGroupsList" :key="grp" :value="grp">{{ grp }}</option>
                 </select>
               </div>
 
@@ -2940,7 +3002,7 @@ onActivated(() => {
                 </div>
                 <select v-model="newAsset.custom_group" class="invisible-select">
                   <option value="">無群組</option>
-                  <option v-for="grp in customGroupsList" :key="grp" :value="grp">{{ grp }}</option>
+                  <option v-for="grp in customInvestGroupsList" :key="grp" :value="grp">{{ grp }}</option>
                 </select>
               </div>
               <div class="form-item-row">
@@ -3411,7 +3473,7 @@ onActivated(() => {
     <div v-if="showManageGroupModal" class="modal-overlay" style="z-index: 3000; background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;">
       <div class="card" style="width: 90%; max-width: 420px; max-height: 80vh; padding: 1.5rem; border: 1px solid var(--color-card-border); background: var(--color-card-bg); box-shadow: var(--shadow-lg); display: flex; flex-direction: column; gap: 1.2rem; overflow: hidden; box-sizing: border-box;">
         <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(0,0,0,0.06); padding-bottom: 0.8rem;">
-          <h3 style="margin: 0; font-size: 1.15rem; color: var(--color-text); font-weight: 800;">⚙️ 管理群組：{{ selectedGroupToManage }}</h3>
+          <h3 style="margin: 0; font-size: 1.15rem; color: var(--color-text); font-weight: 800;">⚙️ 管理{{ activeGroupType === 'account' ? '帳戶' : '投資' }}群組：{{ selectedGroupToManage }}</h3>
           <button @click="showManageGroupModal = false" style="background: none; border: none; color: var(--color-text-muted); cursor: pointer; padding: 4px; font-size: 1.5rem; line-height: 1; display: flex; align-items: center; justify-content: center;">
             &times;
           </button>
@@ -3422,7 +3484,7 @@ onActivated(() => {
           <label style="font-size: 0.85rem; color: var(--color-text); font-weight: bold; text-align: left; display: block;">加到群組</label>
           <div style="display: flex; gap: 8px; width: 100%; box-sizing: border-box;">
             <select v-model="selectedItemToAddToGroup" style="flex: 1; height: 40px; padding: 0 10px; border-radius: 10px; border: 1px solid rgba(0,0,0,0.08); background: white; color: var(--color-text); font-size: 0.9rem; outline: none; width: 70%; min-width: 0;">
-              <option value="" disabled>-- 選擇資產或投資 --</option>
+              <option value="" disabled>-- 選擇要加入的項目 --</option>
               <option v-for="item in getAvailableItemsForGroup" :key="item.id" :value="JSON.stringify({id: item.id, type: item.type})">
                 {{ item.name }}
               </option>
@@ -3435,13 +3497,13 @@ onActivated(() => {
 
         <!-- Current Members List -->
         <div style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 0.6rem; min-height: 150px; padding-right: 4px;">
-          <label style="font-size: 0.85rem; color: var(--color-text-muted); font-weight: bold; text-align: left; display: block;">群組成員列表 ({{ getGroupMembers(selectedGroupToManage).length }})</label>
+          <label style="font-size: 0.85rem; color: var(--color-text-muted); font-weight: bold; text-align: left; display: block;">群組成員列表 ({{ getGroupMembers(selectedGroupToManage, activeGroupType).length }})</label>
           
-          <div v-if="getGroupMembers(selectedGroupToManage).length === 0" style="text-align: center; color: var(--color-text-muted); font-size: 0.85rem; padding: 2rem 0; opacity: 0.7;">
+          <div v-if="getGroupMembers(selectedGroupToManage, activeGroupType).length === 0" style="text-align: center; color: var(--color-text-muted); font-size: 0.85rem; padding: 2rem 0; opacity: 0.7;">
             此群組目前沒有任何項目
           </div>
 
-          <div v-else v-for="member in getGroupMembers(selectedGroupToManage)" :key="member.id" style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: white; border: 1px solid rgba(0,0,0,0.04); border-radius: 10px; box-shadow: 0 1px 2px rgba(0,0,0,0.01);">
+          <div v-else v-for="member in getGroupMembers(selectedGroupToManage, activeGroupType)" :key="member.id" style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: white; border: 1px solid rgba(0,0,0,0.04); border-radius: 10px; box-shadow: 0 1px 2px rgba(0,0,0,0.01);">
             <div style="display: flex; align-items: center; gap: 8px;">
               <span style="font-size: 1.1rem;">{{ member.type === 'account' ? '🏦' : '📈' }}</span>
               <span style="font-size: 0.9rem; color: var(--color-text); font-weight: 600;">{{ member.name }}</span>
@@ -3498,14 +3560,6 @@ onActivated(() => {
   box-sizing: border-box;
 }
 
-.scrollable-settings {
-  flex: 1;
-  overflow-y: auto;
-  padding: 1.5rem 1.25rem 120px 1.25rem;
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
-}
 
 .loader-container {
   display: flex;
