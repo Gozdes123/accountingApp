@@ -48,15 +48,15 @@ const navItems = [
   justify-content: space-between;
   align-items: center;
   gap: 1.5rem;
-  background: rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.95);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(255, 255, 255, 0.5);
+  border: 1px solid rgba(0, 0, 0, 0.06);
   border-radius: 99px;
   padding: 8px 18px;
   box-shadow: 
-    0 10px 30px rgba(0, 0, 0, 0.05),
-    0 1px 2px rgba(0, 0, 0, 0.05);
+    0 10px 30px rgba(0, 0, 0, 0.04),
+    0 1px 2px rgba(0, 0, 0, 0.03);
 }
 
 .nav-item {

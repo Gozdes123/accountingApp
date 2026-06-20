@@ -24,6 +24,28 @@ const isInitialDataLoaded = ref(false)
 const isHidden = ref(true)
 const isRefreshing = ref(false)
 
+const showDeleteConfirm = ref(false)
+const deleteConfirmMessage = ref('')
+let deleteCallback = null
+
+const triggerDeleteConfirm = (message, callback) => {
+  deleteConfirmMessage.value = message
+  deleteCallback = callback
+  showDeleteConfirm.value = true
+}
+
+const confirmDelete = async () => {
+  showDeleteConfirm.value = false
+  if (deleteCallback) {
+    await deleteCallback()
+  }
+}
+
+const cancelDelete = () => {
+  showDeleteConfirm.value = false
+  deleteCallback = null
+}
+
 const isTreeView = ref(false)
 
 const listExpanded = ref({
@@ -316,7 +338,12 @@ const submitAdjustShares = async () => {
         price_updated_at: nowStr
       }
       try {
-        await supabase.from('investments').insert([payload])
+        const dbPayload = { ...payload }
+        delete dbPayload.id
+        const { data, error } = await supabase.from('investments').insert([dbPayload]).select()
+        if (!error && data) {
+          payload.id = data[0].id
+        }
       } catch {}
       investments.value.unshift(payload)
     } else {
@@ -896,6 +923,19 @@ const fetchAllData = async () => {
     usdTwdRate.value = 32
   }
 
+  // Clear any existing mock data from local storage
+  let localAccs = JSON.parse(localStorage.getItem('local_accounts') || '[]')
+  if (localAccs.some(a => String(a.id).startsWith('mock-'))) {
+    localAccs = localAccs.filter(a => !String(a.id).startsWith('mock-'))
+    localStorage.setItem('local_accounts', JSON.stringify(localAccs))
+  }
+
+  let localInvs = JSON.parse(localStorage.getItem('local_investments') || '[]')
+  if (localInvs.some(i => String(i.id).startsWith('mock-'))) {
+    localInvs = localInvs.filter(i => !String(i.id).startsWith('mock-'))
+    localStorage.setItem('local_investments', JSON.stringify(localInvs))
+  }
+
   // 2. Fetch Accounts (Supabase + localStorage fallback)
   let loadedAccounts = []
   try {
@@ -914,17 +954,6 @@ const fetchAllData = async () => {
     loadedAccounts = JSON.parse(localStorage.getItem('local_accounts') || '[]')
   }
   
-  // Seed mock accounts if completely empty
-  if (loadedAccounts.length === 0) {
-    loadedAccounts = [
-      { id: 'mock-acc-1', name: '媽媽的流動資金', balance: 500000, type: 'Bank', created_at: new Date().toISOString() },
-      { id: 'mock-acc-2', name: '微信錢包', balance: 74000, type: 'Cash', created_at: new Date().toISOString() },
-      { id: 'mock-acc-3', name: 'Honda Civic', balance: 320000, type: 'Car', created_at: new Date().toISOString() },
-      { id: 'mock-acc-4', name: '我的房屋', balance: 1200000, type: 'RealEstate', created_at: new Date().toISOString() },
-      { id: 'mock-acc-5', name: '借小明的還款款項', balance: 120000, type: 'Receivable', created_at: new Date().toISOString() }
-    ]
-    localStorage.setItem('local_accounts', JSON.stringify(loadedAccounts))
-  }
   accounts.value = loadedAccounts
 
   // 3. Fetch Investments (Supabase + localStorage fallback)
@@ -945,17 +974,6 @@ const fetchAllData = async () => {
     loadedInvestments = JSON.parse(localStorage.getItem('local_investments') || '[]')
   }
   
-  // Seed mock investments if completely empty
-  if (loadedInvestments.length === 0) {
-    const nowStr = new Date().toISOString()
-    loadedInvestments = [
-      { id: 'mock-inv-1', symbol: 'MSFT', name: '微軟股票', quantity: 1000, average_cost: 300, current_price: 240, currency: 'USD', asset_class: 'Stock', created_at: nowStr, price_updated_at: nowStr },
-      { id: 'mock-inv-2', symbol: '0050', name: '基金', quantity: 2000, average_cost: 30, current_price: 30, currency: 'TWD', asset_class: 'Fund', created_at: nowStr, price_updated_at: nowStr },
-      { id: 'mock-inv-3', symbol: 'BTC', name: '加密貨幣', quantity: 1, average_cost: 22200, current_price: 22200, currency: 'USD', asset_class: 'Crypto', created_at: nowStr, price_updated_at: nowStr },
-      { id: 'mock-inv-4', symbol: 'AAPL', name: '蘋果股票', quantity: 400, average_cost: 40, current_price: 40, currency: 'USD', asset_class: 'Stock', created_at: nowStr, price_updated_at: nowStr }
-    ]
-    localStorage.setItem('local_investments', JSON.stringify(loadedInvestments))
-  }
   investments.value = loadedInvestments
 
   isInitialDataLoaded.value = true
@@ -965,6 +983,9 @@ const fetchAllData = async () => {
 
   // 5. Save daily snapshot
   await saveDailySnapshot(netWorth.value)
+
+  // 6. Sync groups list
+  syncGroups()
 }
 
 const saveDailySnapshot = async (amount) => {
@@ -1270,7 +1291,9 @@ const addAssetItem = async () => {
         }
       } else {
         try {
-          const { data, error } = await supabase.from('investments').insert([payload]).select()
+          const dbPayload = { ...payload }
+          delete dbPayload.id
+          const { data, error } = await supabase.from('investments').insert([dbPayload]).select()
           if (!error && data) payload.id = data[0].id
         } catch (dbErr) {
           console.warn('Supabase DB offline, storing locally only:', dbErr)
@@ -1392,69 +1415,127 @@ const addAssetItem = async () => {
 
 // ── CRUD Deletions ────────────────────────────────────────────────
 const deleteAccount = async (id) => {
-  if (!confirm('確定要刪除此資產項目？')) return
-  
-  try {
-    await supabase.from('accounts').delete().eq('id', id)
-  } catch (e) {
-    console.warn('Supabase delete account failed, deleting locally:', e)
-  }
-  
-  accounts.value = accounts.value.filter(a => a.id !== id)
-  localStorage.setItem('local_accounts', JSON.stringify(accounts.value))
-  await saveDailySnapshot(netWorth.value)
+  triggerDeleteConfirm('確定要刪除此資產項目？此動作無法復原。', async () => {
+    if (id && !String(id).startsWith('local-') && !String(id).startsWith('mock-')) {
+      try {
+        const { error } = await supabase.from('accounts').delete().eq('id', id)
+        if (error) console.warn('Supabase delete account failed:', error)
+      } catch (e) {
+        console.warn('Supabase delete account exception:', e)
+      }
+    }
+    
+    accounts.value = accounts.value.filter(a => a.id !== id)
+    localStorage.setItem('local_accounts', JSON.stringify(accounts.value))
+    await saveDailySnapshot(netWorth.value)
+    
+    // Close modal if we deleted the active item being edited or viewed
+    if (editingId.value === id || (selectedInvestment.value && selectedInvestment.value.id === id)) {
+      closeAddModal()
+    }
+  })
 }
 
 const deleteInvestment = async (id) => {
-  if (!confirm('確定要刪除此投資項目？')) return
-  
-  const inv = investments.value.find(i => i.id === id)
-  
-  try {
-    await supabase.from('investments').delete().eq('id', id)
-  } catch (e) {
-    console.warn('Supabase delete investment failed, deleting locally:', e)
-  }
-  
-  // Refund linked funding account
-  if (inv && inv.funding_account_id) {
-    const cost = Number(inv.quantity || 0) * Number(inv.buy_price || inv.average_cost || 0)
-    const costTwd = inv.currency === 'USD' ? cost * usdTwdRate.value : cost
+  triggerDeleteConfirm('確定要刪除此投資項目？此動作將退回買入成本至連結的扣款帳戶。', async () => {
+    const inv = investments.value.find(i => i.id === id)
     
-    accounts.value = accounts.value.map(acc => {
-      if (acc.id === inv.funding_account_id) {
-        acc.balance += costTwd
+    if (id && !String(id).startsWith('local-') && !String(id).startsWith('mock-')) {
+      try {
+        const { error } = await supabase.from('investments').delete().eq('id', id)
+        if (error) console.warn('Supabase delete investment failed:', error)
+      } catch (e) {
+        console.warn('Supabase delete investment exception:', e)
+      }
+    }
+    
+    // Refund linked funding account
+    if (inv && inv.funding_account_id) {
+      const cost = Number(inv.quantity || 0) * Number(inv.buy_price || inv.average_cost || 0)
+      const costTwd = inv.currency === 'USD' ? cost * usdTwdRate.value : cost
+      
+      accounts.value = accounts.value.map(acc => {
+        if (acc.id === inv.funding_account_id) {
+          acc.balance += costTwd
+          if (acc.id && !String(acc.id).startsWith('local-') && !String(acc.id).startsWith('mock-')) {
+            try {
+              supabase.from('accounts').update({ balance: acc.balance }).eq('id', acc.id)
+            } catch (dbErr) {
+              console.warn('Refund funding account failed:', dbErr)
+            }
+          }
+        }
+        return acc
+      })
+      localStorage.setItem('local_accounts', JSON.stringify(accounts.value))
+    }
+    
+    investments.value = investments.value.filter(i => i.id !== id)
+    localStorage.setItem('local_investments', JSON.stringify(investments.value))
+    await saveDailySnapshot(netWorth.value)
+    
+    // Close modal if we deleted the active item being edited or viewed
+    if (editingId.value === id || (selectedInvestment.value && selectedInvestment.value.id === id)) {
+      closeAddModal()
+    }
+  })
+}
+
+const deleteInvestmentBySymbol = async (symbol) => {
+  if (!symbol) return
+  const matching = investments.value.filter(i => i.symbol.toUpperCase() === symbol.toUpperCase())
+  if (matching.length === 0) return
+  
+  triggerDeleteConfirm(`確定要刪除所有「${symbol}」的投資部位嗎？此動作將退回買入成本至連結的扣款帳戶。`, async () => {
+    for (const inv of matching) {
+      const id = inv.id
+      if (id && !String(id).startsWith('local-') && !String(id).startsWith('mock-')) {
         try {
-          supabase.from('accounts').update({ balance: acc.balance }).eq('id', acc.id)
-        } catch (dbErr) {
-          console.warn('Refund funding account failed:', dbErr)
+          await supabase.from('investments').delete().eq('id', id)
+        } catch (e) {
+          console.warn('Supabase delete investment exception:', e)
         }
       }
-      return acc
-    })
+      
+      // Refund linked funding account
+      if (inv.funding_account_id) {
+        const cost = Number(inv.quantity || 0) * Number(inv.buy_price || inv.average_cost || 0)
+        const costTwd = inv.currency === 'USD' ? cost * usdTwdRate.value : cost
+        
+        accounts.value = accounts.value.map(acc => {
+          if (acc.id === inv.funding_account_id) {
+            acc.balance += costTwd
+            if (acc.id && !String(acc.id).startsWith('local-') && !String(acc.id).startsWith('mock-')) {
+              try {
+                supabase.from('accounts').update({ balance: acc.balance }).eq('id', acc.id)
+              } catch (dbErr) {
+                console.warn('Refund funding account failed:', dbErr)
+              }
+            }
+          }
+          return acc
+        })
+      }
+    }
+    
+    // Filter out all investments matching this symbol
+    investments.value = investments.value.filter(i => i.symbol.toUpperCase() !== symbol.toUpperCase())
+    localStorage.setItem('local_investments', JSON.stringify(investments.value))
     localStorage.setItem('local_accounts', JSON.stringify(accounts.value))
-  }
-  
-  investments.value = investments.value.filter(i => i.id !== id)
-  localStorage.setItem('local_investments', JSON.stringify(investments.value))
-  await saveDailySnapshot(netWorth.value)
+    await saveDailySnapshot(netWorth.value)
+    
+    closeAddModal()
+  })
 }
+
 
 const handleDeleteFromEdit = async () => {
   if (!isEditing.value || !editingId.value) return
   
   if (newAsset.value.category === 'invest') {
     await deleteInvestment(editingId.value)
-    const exists = investments.value.some(i => i.id === editingId.value)
-    if (!exists) {
-      closeAddModal()
-    }
   } else {
     await deleteAccount(editingId.value)
-    const exists = accounts.value.some(a => a.id === editingId.value)
-    if (!exists) {
-      closeAddModal()
-    }
   }
 }
 
@@ -1745,6 +1826,161 @@ const processAutoRecords = async () => {
   }
 }
 
+// ── Custom Group Management ──────────────────────────────────────
+const customGroupsList = ref(JSON.parse(localStorage.getItem('custom_groups') || '["台股", "美股", "流動資產"]'))
+
+const syncGroups = () => {
+  const dbGroups = new Set()
+  if (Array.isArray(accounts.value)) {
+    accounts.value.forEach(a => { if (a.custom_group && a.custom_group.trim()) dbGroups.add(a.custom_group.trim()) })
+  }
+  if (Array.isArray(investments.value)) {
+    investments.value.forEach(i => { if (i.custom_group && i.custom_group.trim()) dbGroups.add(i.custom_group.trim()) })
+  }
+  
+  const localGroups = JSON.parse(localStorage.getItem('custom_groups') || '["台股", "美股", "流動資產"]')
+  const merged = Array.from(new Set([...localGroups, ...dbGroups]))
+  localStorage.setItem('custom_groups', JSON.stringify(merged))
+  customGroupsList.value = merged
+}
+
+const getGroupMemberCount = (groupName) => {
+  return getGroupMembers(groupName).length
+}
+
+const getGroupMembers = (groupName) => {
+  const accs = (accounts.value || []).filter(a => a.custom_group === groupName).map(a => ({ id: a.id, name: a.name, type: 'account' }))
+  const invs = (investments.value || []).filter(i => i.custom_group === groupName).map(i => ({ id: i.id, name: `${i.symbol} (${i.name || ''})`, type: 'investment' }))
+  return [...accs, ...invs]
+}
+
+const deleteGroup = (groupName) => {
+  triggerDeleteConfirm(`確定要刪除群組「${groupName}」嗎？群組內的資產與投資將設為無群組，不會刪除實際資料。`, async () => {
+    // Remove group from accounts
+    accounts.value = accounts.value.map(a => {
+      if (a.custom_group === groupName) {
+        a.custom_group = ''
+        if (a.id && !String(a.id).startsWith('local-') && !String(a.id).startsWith('mock-')) {
+          supabase.from('accounts').update({ custom_group: '' }).eq('id', a.id)
+        }
+      }
+      return a
+    })
+    localStorage.setItem('local_accounts', JSON.stringify(accounts.value))
+
+    // Remove group from investments
+    investments.value = investments.value.map(i => {
+      if (i.custom_group === groupName) {
+        i.custom_group = ''
+        if (i.id && !String(i.id).startsWith('local-') && !String(i.id).startsWith('mock-')) {
+          supabase.from('investments').update({ custom_group: '' }).eq('id', i.id)
+        }
+      }
+      return i
+    })
+    localStorage.setItem('local_investments', JSON.stringify(investments.value))
+
+    // Remove from local customGroupsList
+    customGroupsList.value = customGroupsList.value.filter(g => g !== groupName)
+    localStorage.setItem('custom_groups', JSON.stringify(customGroupsList.value))
+  })
+}
+
+// Create Group State
+const showCreateGroupModal = ref(false)
+const newGroupName = ref('')
+
+const openCreateGroupModal = () => {
+  newGroupName.value = ''
+  showCreateGroupModal.value = true
+}
+
+const submitCreateGroup = () => {
+  const name = newGroupName.value.trim()
+  if (!name) return
+  if (customGroupsList.value.includes(name)) {
+    alert('群組名稱已存在')
+    return
+  }
+  customGroupsList.value.push(name)
+  localStorage.setItem('custom_groups', JSON.stringify(customGroupsList.value))
+  showCreateGroupModal.value = false
+}
+
+// Manage Group Modal State
+const showManageGroupModal = ref(false)
+const selectedGroupToManage = ref('')
+const selectedItemToAddToGroup = ref('')
+
+const manageGroup = (groupName) => {
+  selectedGroupToManage.value = groupName
+  selectedItemToAddToGroup.value = ''
+  showManageGroupModal.value = true
+}
+
+const getAvailableItemsForGroup = computed(() => {
+  const accs = (accounts.value || []).filter(a => a.custom_group !== selectedGroupToManage.value).map(a => ({ id: a.id, name: `🏦 ${a.name} (${translateTypeSettings(a.type)})`, type: 'account' }))
+  const invs = (investments.value || []).filter(i => i.custom_group !== selectedGroupToManage.value).map(i => ({ id: i.id, name: `📈 ${i.symbol} (${i.name || ''})`, type: 'investment' }))
+  return [...accs, ...invs]
+})
+
+const addItemToGroup = async () => {
+  if (!selectedItemToAddToGroup.value) return
+  const itemJson = JSON.parse(selectedItemToAddToGroup.value)
+  const { id, type } = itemJson
+
+  if (type === 'account') {
+    accounts.value = accounts.value.map(a => {
+      if (a.id === id) {
+        a.custom_group = selectedGroupToManage.value
+        if (a.id && !String(a.id).startsWith('local-') && !String(a.id).startsWith('mock-')) {
+          supabase.from('accounts').update({ custom_group: selectedGroupToManage.value }).eq('id', a.id)
+        }
+      }
+      return a
+    })
+    localStorage.setItem('local_accounts', JSON.stringify(accounts.value))
+  } else {
+    investments.value = investments.value.map(i => {
+      if (i.id === id) {
+        i.custom_group = selectedGroupToManage.value
+        if (i.id && !String(i.id).startsWith('local-') && !String(i.id).startsWith('mock-')) {
+          supabase.from('investments').update({ custom_group: selectedGroupToManage.value }).eq('id', i.id)
+        }
+      }
+      return i
+    })
+    localStorage.setItem('local_investments', JSON.stringify(investments.value))
+  }
+  selectedItemToAddToGroup.value = ''
+}
+
+const removeItemFromGroup = async (id, type) => {
+  if (type === 'account') {
+    accounts.value = accounts.value.map(a => {
+      if (a.id === id) {
+        a.custom_group = ''
+        if (a.id && !String(a.id).startsWith('local-') && !String(a.id).startsWith('mock-')) {
+          supabase.from('accounts').update({ custom_group: '' }).eq('id', a.id)
+        }
+      }
+      return a
+    })
+    localStorage.setItem('local_accounts', JSON.stringify(accounts.value))
+  } else {
+    investments.value = investments.value.map(i => {
+      if (i.id === id) {
+        i.custom_group = ''
+        if (i.id && !String(i.id).startsWith('local-') && !String(i.id).startsWith('mock-')) {
+          supabase.from('investments').update({ custom_group: '' }).eq('id', i.id)
+        }
+      }
+      return i
+    })
+    localStorage.setItem('local_investments', JSON.stringify(investments.value))
+  }
+}
+
 onMounted(() => {
   fetchAllData()
 })
@@ -1755,7 +1991,7 @@ onActivated(() => {
 </script>
 
 <template>
-  <div class="dashboard-container" v-if="isInitialDataLoaded" :style="{ backgroundColor: isTreeView ? '#121214' : 'var(--color-bg)' }">
+  <div class="dashboard-container" v-if="isInitialDataLoaded" :style="{ backgroundColor: 'var(--color-bg)' }">
     
     <!-- Toast Notification -->
     <div v-if="toastMessage" class="app-toast">
@@ -1764,16 +2000,16 @@ onActivated(() => {
     </div>
 
     <!-- ── 1. 資產清單視圖 (List Tab) ────────────────────────────────── -->
-    <div v-if="currentTab === 'list'" class="tab-view-content" :style="{ backgroundColor: isTreeView ? '#121214' : 'var(--color-bg)', padding: isTreeView ? '1.5rem 1.25rem' : '1.5rem 1.25rem 120px 1.25rem' }">
+    <div v-if="currentTab === 'list'" class="tab-view-content" :style="{ backgroundColor: 'var(--color-bg)', padding: isTreeView ? '1.5rem 1.25rem' : '1.5rem 1.25rem 120px 1.25rem' }">
       
       <!-- Case 1: Tree View -->
       <template v-if="isTreeView">
         <!-- Top Balance Header -->
         <div class="top-balance-header" style="margin-bottom: 1rem;">
           <div class="balance-row" style="align-items: center; margin-top: 0; width: 100%;">
-            <span class="balance-title" style="font-size: 1.5rem; font-weight: 800; color: #ffffff;">資產分配比</span>
+            <span class="balance-title" style="font-size: 1.5rem; font-weight: 800; color: var(--color-text);">資產分配比</span>
             <!-- Caret right in circle button matches the screenshot -->
-            <button class="nav-back-circle" @click="isTreeView = false" title="返回列表" style="background: #2c2c2e; color: #ffffff; width: 36px; height: 36px;">
+            <button class="nav-back-circle" @click="isTreeView = false" title="返回列表" style="background: rgba(0, 0, 0, 0.05); color: var(--color-text); width: 36px; height: 36px;">
               <PhCaretRight size="20" weight="bold" />
             </button>
           </div>
@@ -2049,22 +2285,22 @@ onActivated(() => {
     </div>
 
     <!-- ── 2. 趨勢圖視圖 (Trend Tab) ────────────────────────────────── -->
-    <div v-if="currentTab === 'trend'" class="tab-view-content flex-grow-trend" style="background: #121214; height: 100vh; min-height: 100vh; padding: 0; color: #ffffff; box-sizing: border-box; overflow: hidden; display: flex; flex-direction: column;">
+    <div v-if="currentTab === 'trend'" class="tab-view-content flex-grow-trend" style="background: var(--color-bg); height: 100vh; min-height: 100vh; padding: 0; color: var(--color-text); box-sizing: border-box; overflow: hidden; display: flex; flex-direction: column;">
       <!-- Fixed Header & Segment Selector Area -->
-      <div style="flex-shrink: 0; padding: 0 16px; background: #121214;">
+      <div style="flex-shrink: 0; padding: 0 16px; background: var(--color-bg);">
         <!-- Header -->
-        <div class="modal-navbar" style="background: #121214; padding-top: 14px; padding-bottom: 14px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255, 255, 255, 0.05); margin-bottom: 0;">
+        <div class="modal-navbar" style="background: var(--color-bg); padding-top: 14px; padding-bottom: 14px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--color-card-border); margin-bottom: 0;">
           <!-- Empty Spacer to keep title centered -->
           <div style="width: 36px;"></div>
-          <span class="nav-title" style="color: #ffffff; font-size: 1.15rem; font-weight: 700;">趨勢圖</span>
+          <span class="nav-title" style="color: var(--color-text); font-size: 1.15rem; font-weight: 700;">趨勢圖</span>
           <!-- Close button X -->
-          <button class="nav-back-circle" @click="currentTab = 'list'" title="關閉" style="background: #2c2c2e; color: #ffffff; width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; border: none; cursor: pointer; margin: 0;">
+          <button class="nav-back-circle" @click="currentTab = 'list'" title="關閉" style="background: rgba(0, 0, 0, 0.05); color: var(--color-text); width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; border: none; cursor: pointer; margin: 0;">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
           </button>
         </div>
 
         <!-- Segment Selector -->
-        <div style="display: flex; background: #1c1c1e; padding: 4px; border-radius: 20px; margin-top: 18px; margin-bottom: 20px;">
+        <div style="display: flex; background: rgba(0, 0, 0, 0.04); padding: 4px; border-radius: 20px; margin-top: 18px; margin-bottom: 20px;">
           <button 
             @click="trendType = 'net_worth'"
             :style="{
@@ -2075,9 +2311,9 @@ onActivated(() => {
               fontSize: '0.9rem',
               fontWeight: '700',
               cursor: 'pointer',
-              background: trendType === 'net_worth' ? 'rgba(255,255,255,0.12)' : 'transparent',
-              color: '#ffffff',
-              boxShadow: 'none'
+              background: trendType === 'net_worth' ? '#ffffff' : 'transparent',
+              color: trendType === 'net_worth' ? 'var(--color-text)' : 'var(--color-text-muted)',
+              boxShadow: trendType === 'net_worth' ? '0 2px 4px rgba(0,0,0,0.05)' : 'none'
             }"
           >
             淨資產與負債
@@ -2092,9 +2328,9 @@ onActivated(() => {
               fontSize: '0.9rem',
               fontWeight: '700',
               cursor: 'pointer',
-              background: trendType === 'liquid_invest' ? 'rgba(255,255,255,0.12)' : 'transparent',
-              color: '#ffffff',
-              boxShadow: 'none'
+              background: trendType === 'liquid_invest' ? '#ffffff' : 'transparent',
+              color: trendType === 'liquid_invest' ? 'var(--color-text)' : 'var(--color-text-muted)',
+              boxShadow: trendType === 'liquid_invest' ? '0 2px 4px rgba(0,0,0,0.05)' : 'none'
             }"
           >
             流動資金與投資
@@ -2106,22 +2342,22 @@ onActivated(() => {
       <div style="flex: 1; overflow-y: auto; padding: 0 16px; box-sizing: border-box; -webkit-overflow-scrolling: touch;">
         <!-- Date Range & Summary Info -->
         <div style="text-align: left; padding: 0 4px; margin-bottom: 24px;">
-          <div style="font-size: 0.85rem; color: #828e9e; font-weight: bold; margin-bottom: 10px;">
+          <div style="font-size: 0.85rem; color: var(--color-text-muted); font-weight: bold; margin-bottom: 10px;">
             {{ trendDateRangeText }}
           </div>
           <template v-if="trendType === 'net_worth'">
-            <div style="font-size: 0.95rem; font-weight: 700; color: #ffffff; line-height: 1.6;">
+            <div style="font-size: 0.95rem; font-weight: 700; color: var(--color-text); line-height: 1.6;">
               {{ netWorthSummaryText.nw }}
             </div>
-            <div style="font-size: 0.95rem; font-weight: 700; color: #ffffff; line-height: 1.6; margin-top: 4px;">
+            <div style="font-size: 0.95rem; font-weight: 700; color: var(--color-text); line-height: 1.6; margin-top: 4px;">
               {{ netWorthSummaryText.liab }}
             </div>
           </template>
           <template v-else>
-            <div style="font-size: 0.95rem; font-weight: 700; color: #ffffff; line-height: 1.6;">
+            <div style="font-size: 0.95rem; font-weight: 700; color: var(--color-text); line-height: 1.6;">
               {{ liquidInvestSummaryText.liquid }}
             </div>
-            <div style="font-size: 0.95rem; font-weight: 700; color: #ffffff; line-height: 1.6; margin-top: 4px;">
+            <div style="font-size: 0.95rem; font-weight: 700; color: var(--color-text); line-height: 1.6; margin-top: 4px;">
               {{ liquidInvestSummaryText.invest }}
             </div>
           </template>
@@ -2130,22 +2366,22 @@ onActivated(() => {
         <!-- Legend -->
         <div style="display: flex; gap: 24px; align-items: center; margin-bottom: 24px; padding-left: 12px;">
           <template v-if="trendType === 'net_worth'">
-            <div style="display: flex; align-items: center; gap: 6px; font-size: 0.82rem; font-weight: bold; color: #ffffff;">
+            <div style="display: flex; align-items: center; gap: 6px; font-size: 0.82rem; font-weight: bold; color: var(--color-text);">
               <span style="display: inline-block; width: 12px; height: 12px; background: #5c67f5; border-radius: 2px;"></span>
               我的淨資產
             </div>
-            <div style="display: flex; align-items: center; gap: 6px; font-size: 0.82rem; font-weight: bold; color: #ffffff;">
+            <div style="display: flex; align-items: center; gap: 6px; font-size: 0.82rem; font-weight: bold; color: var(--color-text);">
               <!-- Dotted box indicator matching native design -->
               <span style="display: inline-flex; width: 12px; height: 12px; border: 1.5px dashed #a0a0a5; box-sizing: border-box; border-radius: 2px;"></span>
               負債
             </div>
           </template>
           <template v-else>
-            <div style="display: flex; align-items: center; gap: 6px; font-size: 0.82rem; font-weight: bold; color: #ffffff;">
+            <div style="display: flex; align-items: center; gap: 6px; font-size: 0.82rem; font-weight: bold; color: var(--color-text);">
               <span style="display: inline-block; width: 12px; height: 12px; background: #2ec173; border-radius: 2px;"></span>
               流動資金
             </div>
-            <div style="display: flex; align-items: center; gap: 6px; font-size: 0.82rem; font-weight: bold; color: #ffffff;">
+            <div style="display: flex; align-items: center; gap: 6px; font-size: 0.82rem; font-weight: bold; color: var(--color-text);">
               <span style="display: inline-block; width: 12px; height: 12px; background: #7839ec; border-radius: 2px;"></span>
               投資
             </div>
@@ -2160,17 +2396,17 @@ onActivated(() => {
         <!-- Custom Date Picker Row -->
         <div v-if="timeFilter === 'ALL'" style="display: flex; gap: 12px; align-items: center; margin-bottom: 20px; padding: 0 4px;">
           <div style="flex: 1; display: flex; flex-direction: column; gap: 4px; text-align: left;">
-            <span style="font-size: 0.75rem; color: #828e9e; font-weight: bold;">開始日期</span>
-            <input type="date" v-model="customStartDate" class="reset-input" style="background: #1c1c1e !important; border: 1px solid rgba(255,255,255,0.1) !important; color: #ffffff !important; padding: 8px 12px !important; border-radius: 12px !important; font-size: 0.85rem !important; width: 100% !important; outline: none; margin: 0 !important; height: auto !important; line-height: normal !important;" />
+            <span style="font-size: 0.75rem; color: var(--color-text-muted); font-weight: bold;">開始日期</span>
+            <input type="date" v-model="customStartDate" class="reset-input" style="background: #f1f5f9 !important; border: 1px solid rgba(0,0,0,0.08) !important; color: var(--color-text) !important; padding: 8px 12px !important; border-radius: 12px !important; font-size: 0.85rem !important; width: 100% !important; outline: none; margin: 0 !important; height: auto !important; line-height: normal !important;" />
           </div>
           <div style="flex: 1; display: flex; flex-direction: column; gap: 4px; text-align: left;">
-            <span style="font-size: 0.75rem; color: #828e9e; font-weight: bold;">結束日期</span>
-            <input type="date" v-model="customEndDate" class="reset-input" style="background: #1c1c1e !important; border: 1px solid rgba(255,255,255,0.1) !important; color: #ffffff !important; padding: 8px 12px !important; border-radius: 12px !important; font-size: 0.85rem !important; width: 100% !important; outline: none; margin: 0 !important; height: auto !important; line-height: normal !important;" />
+            <span style="font-size: 0.75rem; color: var(--color-text-muted); font-weight: bold;">結束日期</span>
+            <input type="date" v-model="customEndDate" class="reset-input" style="background: #f1f5f9 !important; border: 1px solid rgba(0,0,0,0.08) !important; color: var(--color-text) !important; padding: 8px 12px !important; border-radius: 12px !important; font-size: 0.85rem !important; width: 100% !important; outline: none; margin: 0 !important; height: auto !important; line-height: normal !important;" />
           </div>
         </div>
 
         <!-- Capsule Time Filter Selector -->
-        <div style="display: flex; background: #1c1c1e; padding: 4px; border-radius: 25px; gap: 4px; margin-bottom: 20px;">
+        <div style="display: flex; background: rgba(0, 0, 0, 0.04); padding: 4px; border-radius: 25px; gap: 4px; margin-bottom: 20px;">
           <button 
             v-for="time in [
               { label: '30天', value: '30D' },
@@ -2189,9 +2425,9 @@ onActivated(() => {
               fontSize: '0.82rem',
               fontWeight: '700',
               cursor: 'pointer',
-              background: timeFilter === time.value ? 'rgba(255,255,255,0.12)' : 'transparent',
-              color: '#ffffff',
-              boxShadow: 'none'
+              background: timeFilter === time.value ? '#ffffff' : 'transparent',
+              color: timeFilter === time.value ? 'var(--color-text)' : 'var(--color-text-muted)',
+              boxShadow: timeFilter === time.value ? '0 2px 4px rgba(0,0,0,0.05)' : 'none'
             }"
           >
             {{ time.label }}
@@ -2252,6 +2488,34 @@ onActivated(() => {
         </div>
         <div v-else class="settings-empty">目前尚無投資資料</div>
       </div>
+
+      <!-- Custom Groups Table List -->
+      <div class="settings-section card" style="margin-top: 1rem;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.8rem;">
+          <h4 class="section-title" style="margin: 0;">🏷️ 自訂群組管理</h4>
+          <button class="icon-text-btn" @click="openCreateGroupModal" style="padding: 4px 10px; font-size: 0.8rem; background: var(--color-primary); color: white; border-radius: 8px; display: flex; align-items: center; gap: 4px; border: none; cursor: pointer;">
+            <PhPlus size="14" />
+            <span>新增群組</span>
+          </button>
+        </div>
+        <div class="settings-table-list" v-if="customGroupsList.length > 0">
+          <div v-for="grp in customGroupsList" :key="grp" class="settings-table-item" @click="manageGroup(grp)">
+            <div class="item-meta">
+              <span class="item-name">{{ grp }}</span>
+              <span class="item-type-badge">{{ getGroupMemberCount(grp) }} 個項目</span>
+            </div>
+            <div class="item-right-wrap">
+              <button class="delete-btn" @click.stop="deleteGroup(grp)" title="刪除">
+                <PhTrash size="16" />
+              </button>
+            </div>
+          </div>
+        </div>
+        <div v-else class="settings-empty">目前尚無自訂群組</div>
+      </div>
+
+      <!-- Bottom spacer to prevent overlap with floating BottomNav -->
+      <div style="height: 110px; flex-shrink: 0;"></div>
     </div>
 
     <!-- ── 4. Unified Add Modal (Step 1: Accordion menu | Step 1.5: Provider list | Step 2: Form | Step 3: Auto-Record) ── -->
@@ -2552,25 +2816,18 @@ onActivated(() => {
               </div>
 
               <!-- 自訂群組 -->
-              <div class="form-item-row" :style="{ borderBottom: existingGroups.length > 0 ? 'none' : '1px solid rgba(255, 255, 255, 0.05)' }">
+              <div class="form-item-row" style="position: relative;">
                 <span class="row-label">自訂群組</span>
-                <input v-model="newAsset.custom_group" placeholder="例: 台股、美股、ETF" class="input-flat-right text-right" />
-              </div>
-              <div v-if="existingGroups.length > 0" style="padding: 0 18px 14px 18px; display: flex; flex-wrap: wrap; gap: 8px; border-bottom: 1px solid rgba(255, 255, 255, 0.05); margin-top: -4px;">
-                <button 
-                  v-for="grp in existingGroups" 
-                  :key="grp"
-                  @click.prevent="newAsset.custom_group = grp"
-                  type="button"
-                  style="background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(255, 255, 255, 0.08); color: rgba(255, 255, 255, 0.7); padding: 4px 10px; border-radius: 12px; font-size: 0.75rem; cursor: pointer; transition: all 0.2s; box-shadow: none;"
-                  :style="{
-                    background: newAsset.custom_group === grp ? 'rgba(92, 103, 245, 0.2)' : 'rgba(255, 255, 255, 0.06)',
-                    borderColor: newAsset.custom_group === grp ? '#5c67f5' : 'rgba(255, 255, 255, 0.08)',
-                    color: newAsset.custom_group === grp ? '#ffffff' : 'rgba(255, 255, 255, 0.7)'
-                  }"
-                >
-                  {{ grp }}
-                </button>
+                <div class="row-value-wrapper">
+                  <span class="display-val" style="color: var(--color-text); font-size: 0.95rem; font-weight: 700;">
+                    {{ newAsset.custom_group || '無群組' }}
+                  </span>
+                  <PhCaretRight size="16" class="caret-indicator" />
+                </div>
+                <select v-model="newAsset.custom_group" class="invisible-select">
+                  <option value="">無群組</option>
+                  <option v-for="grp in customGroupsList" :key="grp" :value="grp">{{ grp }}</option>
+                </select>
               </div>
 
               <!-- 計入圖表 -->
@@ -2613,25 +2870,18 @@ onActivated(() => {
               </div>
 
               <!-- 自訂群組 -->
-              <div class="form-item-row" :style="{ borderBottom: existingGroups.length > 0 ? 'none' : '1px solid rgba(255, 255, 255, 0.05)' }">
+              <div class="form-item-row" style="position: relative;">
                 <span class="row-label">自訂群組</span>
-                <input v-model="newAsset.custom_group" placeholder="例: 銀行存款、電子錢包" class="input-flat-right text-right" />
-              </div>
-              <div v-if="existingGroups.length > 0" style="padding: 0 18px 14px 18px; display: flex; flex-wrap: wrap; gap: 8px; border-bottom: 1px solid rgba(255, 255, 255, 0.05); margin-top: -4px;">
-                <button 
-                  v-for="grp in existingGroups" 
-                  :key="grp"
-                  @click.prevent="newAsset.custom_group = grp"
-                  type="button"
-                  style="background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(255, 255, 255, 0.08); color: rgba(255, 255, 255, 0.7); padding: 4px 10px; border-radius: 12px; font-size: 0.75rem; cursor: pointer; transition: all 0.2s; box-shadow: none;"
-                  :style="{
-                    background: newAsset.custom_group === grp ? 'rgba(92, 103, 245, 0.2)' : 'rgba(255, 255, 255, 0.06)',
-                    borderColor: newAsset.custom_group === grp ? '#5c67f5' : 'rgba(255, 255, 255, 0.08)',
-                    color: newAsset.custom_group === grp ? '#ffffff' : 'rgba(255, 255, 255, 0.7)'
-                  }"
-                >
-                  {{ grp }}
-                </button>
+                <div class="row-value-wrapper">
+                  <span class="display-val" style="color: var(--color-text); font-size: 0.95rem; font-weight: 700;">
+                    {{ newAsset.custom_group || '無群組' }}
+                  </span>
+                  <PhCaretRight size="16" class="caret-indicator" />
+                </div>
+                <select v-model="newAsset.custom_group" class="invisible-select">
+                  <option value="">無群組</option>
+                  <option v-for="grp in customGroupsList" :key="grp" :value="grp">{{ grp }}</option>
+                </select>
               </div>
               <div class="form-item-row">
                 <span class="row-label">計入圖表</span>
@@ -2801,16 +3051,16 @@ onActivated(() => {
       </div>
 
       <!-- Step 4: Investment Detail View -->
-      <div class="modal-content-full" v-else-if="addModalStep === 4" style="background: #121214; min-height: 100vh;">
-        <div class="modal-navbar" style="background: #121214; border-bottom: 1px solid rgba(255, 255, 255, 0.05); padding-bottom: 16px;">
+      <div class="modal-content-full" v-else-if="addModalStep === 4" style="background: var(--color-bg); min-height: 100vh;">
+        <div class="modal-navbar" style="background: var(--color-bg); border-bottom: 1px solid var(--color-card-border); padding-bottom: 16px;">
           <!-- Close button X -->
-          <button class="nav-back-circle" @click="closeAddModal()" title="關閉" style="background: #2c2c2e; color: #ffffff; width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center;">
+          <button class="nav-back-circle" @click="closeAddModal()" title="關閉" style="background: rgba(0, 0, 0, 0.05); color: var(--color-text); width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center;">
             <PhMinusCircle size="20" weight="bold" />
           </button>
-          <span class="nav-title">詳情</span>
+          <span class="nav-title" style="color: var(--color-text);">詳情</span>
           <!-- Pencil (Edit) in header -->
           <div style="display: flex; gap: 8px;">
-            <button class="nav-back-circle" @click="editInvestmentBySymbol(selectedSymbol)" title="編輯" style="background: #2c2c2e; color: #ffffff; width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center;">
+            <button class="nav-back-circle" @click="editInvestmentBySymbol(selectedSymbol)" title="編輯" style="background: rgba(0, 0, 0, 0.05); color: var(--color-text); width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center;">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
             </button>
           </div>
@@ -2820,100 +3070,111 @@ onActivated(() => {
           <!-- Stock Header Info (TW/US icon + Name + Symbol) -->
           <div style="display: flex; align-items: center; gap: 12px; margin-top: 24px;">
             <!-- Badge Icon for region -->
-            <div class="region-badge-circle" :style="{ background: selectedInvestment.currency === 'USD' ? 'rgba(92,103,245,0.15)' : 'rgba(120,57,236,0.15)', color: selectedInvestment.currency === 'USD' ? '#5c67f5' : '#7839ec', border: selectedInvestment.currency === 'USD' ? '1px solid rgba(92,103,245,0.3)' : '1px solid rgba(120,57,236,0.3)', width: '36px', height: '36px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', fontSize: '0.8rem' }">
+            <div class="region-badge-circle" :style="{ background: selectedInvestment.currency === 'USD' ? 'rgba(92,103,245,0.1)' : 'rgba(120,57,236,0.1)', color: selectedInvestment.currency === 'USD' ? '#5c67f5' : '#7839ec', border: selectedInvestment.currency === 'USD' ? '1px solid rgba(92,103,245,0.2)' : '1px solid rgba(120,57,236,0.2)', width: '36px', height: '36px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', fontSize: '0.8rem' }">
               {{ selectedInvestment.currency === 'USD' ? 'US' : 'TW' }}
             </div>
             <div style="display: flex; flex-direction: column; text-align: left;">
-              <span style="color: #ffffff; font-size: 1.25rem; font-weight: 800;">{{ selectedInvestment.name }}</span>
-              <span style="color: #828e9e; font-size: 0.85rem; font-weight: 600; margin-top: 1px;">{{ selectedInvestment.symbol }}</span>
+              <span style="color: var(--color-text); font-size: 1.25rem; font-weight: 800;">{{ selectedInvestment.name }}</span>
+              <span style="color: var(--color-text-muted); font-size: 0.85rem; font-weight: 600; margin-top: 1px;">{{ selectedInvestment.symbol }}</span>
             </div>
           </div>
 
           <!-- Large Balance -->
           <div style="text-align: left; margin-top: 32px; margin-bottom: 32px;">
-            <div style="color: #ffffff; font-size: 2.5rem; font-weight: 800; font-family: var(--font-display); letter-spacing: -0.02em;">
+            <div style="color: var(--color-text); font-size: 2.5rem; font-weight: 800; font-family: var(--font-display); letter-spacing: -0.02em;">
               {{ formatInvestCurrency(selectedInvestment.value, selectedInvestment.currency) }}
             </div>
           </div>
 
           <div style="display: flex; gap: 14px; margin-bottom: 36px;">
-            <button class="pill-btn-gray" @click="openAdjustShares()" style="flex: 1; padding: 12px; border-radius: 50px; font-weight: 700; font-size: 0.95rem; background: #2c2c2e; color: #ffffff; border: none; cursor: pointer; transition: background 0.2s;" onmouseover="this.style.background='#3a3a3c'" onmouseout="this.style.background='#2c2c2e'">
+            <button class="pill-btn-gray" @click="openAdjustShares()" style="flex: 1; padding: 12px; border-radius: 50px; font-weight: 700; font-size: 0.95rem; background: rgba(0, 0, 0, 0.05); color: var(--color-text); border: none; cursor: pointer; transition: background 0.2s;" onmouseover="this.style.background='rgba(0, 0, 0, 0.08)'" onmouseout="this.style.background='rgba(0, 0, 0, 0.05)'">
               增減股數
             </button>
-            <button class="pill-btn-white" @click="openModifyBalance()" style="flex: 1; padding: 12px; border-radius: 50px; font-weight: 700; font-size: 0.95rem; background: #ffffff; color: #121214; border: none; cursor: pointer; transition: opacity 0.2s;" onmouseover="this.style.opacity='0.9'" onmouseout="this.style.opacity='1'">
+            <button class="pill-btn-white" @click="openModifyBalance()" style="flex: 1; padding: 12px; border-radius: 50px; font-weight: 700; font-size: 0.95rem; background: var(--color-primary); color: #ffffff; border: none; cursor: pointer; transition: opacity 0.2s;" onmouseover="this.style.opacity='0.9'" onmouseout="this.style.opacity='1'">
               修改餘額
             </button>
           </div>
 
           <!-- Change History List -->
           <div class="history-section" style="text-align: left;">
-            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 10px; margin-bottom: 14px;">
-              <span style="color: #828e9e; font-size: 0.9rem; font-weight: 700;">變動記錄</span>
-              <span style="color: #828e9e; font-size: 0.85rem; cursor: pointer; opacity: 0.7;">⚙️</span>
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(0,0,0,0.06); padding-bottom: 10px; margin-bottom: 14px;">
+              <span style="color: var(--color-text-muted); font-size: 0.9rem; font-weight: 700;">變動記錄</span>
+              <span style="color: var(--color-text-muted); font-size: 0.85rem; cursor: pointer; opacity: 0.7;">⚙️</span>
             </div>
 
             <!-- List of Lots -->
             <div style="display: flex; flex-direction: column; gap: 14px;">
-              <div v-for="lot in selectedInvestment.lots" :key="lot.id" class="history-item-row" style="display: flex; justify-content: space-between; align-items: flex-start; padding-bottom: 14px; border-bottom: 1px solid rgba(255,255,255,0.04);">
+              <div v-for="lot in selectedInvestment.lots" :key="lot.id" class="history-item-row" style="display: flex; justify-content: space-between; align-items: flex-start; padding-bottom: 14px; border-bottom: 1px solid rgba(0,0,0,0.04);">
                 <div style="display: flex; flex-direction: column;">
-                  <span style="color: #ffffff; font-size: 0.95rem; font-weight: 700;">修改餘額</span>
-                  <span style="color: #828e9e; font-size: 0.82rem; margin-top: 4px;">持有 {{ formatInvestNumber(lot.quantity) }}, {{ lot.currency }} {{ formatInvestNumber(lot.buy_price) }}</span>
-                  <span style="color: #60697a; font-size: 0.8rem; margin-top: 4px;">{{ formatDateDetailed(lot.buy_date || lot.created_at) }}</span>
+                  <span style="color: var(--color-text); font-size: 0.95rem; font-weight: 700;">修改餘額</span>
+                  <span style="color: var(--color-text-muted); font-size: 0.82rem; margin-top: 4px;">持有 {{ formatInvestNumber(lot.quantity) }}, {{ lot.currency }} {{ formatInvestNumber(lot.buy_price) }}</span>
+                  <span style="color: var(--color-text-muted); opacity: 0.8; font-size: 0.8rem; margin-top: 4px;">{{ formatDateDetailed(lot.buy_date || lot.created_at) }}</span>
                 </div>
                 <div style="display: flex; flex-direction: column; align-items: flex-end;">
                   <span style="color: #2ec173; font-size: 0.95rem; font-weight: 700;">+{{ formatHistoryValue(lot.quantity * lot.current_price, lot.currency) }}</span>
-                  <span style="color: #828e9e; font-size: 0.82rem; margin-top: 4px;">餘額 {{ formatHistoryValue(lot.quantity * lot.current_price, lot.currency) }}</span>
+                  <span style="color: var(--color-text-muted); font-size: 0.82rem; margin-top: 4px;">餘額 {{ formatHistoryValue(lot.quantity * lot.current_price, lot.currency) }}</span>
                 </div>
               </div>
             </div>
+          </div>
+
+          <!-- Delete button at the bottom of the detail container -->
+          <div style="padding: 16px 0; margin-top: 24px;">
+            <button 
+              type="button" 
+              @click="deleteInvestmentBySymbol(selectedSymbol)" 
+              style="width: 100%; padding: 15px; border-radius: 16px; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.2); color: #ef4444; font-weight: 700; font-size: 0.95rem; cursor: pointer; transition: all 0.2s; box-shadow: none;"
+            >
+              刪除此項目
+            </button>
           </div>
         </div>
       </div>
 
       <!-- Step 5: Adjust Shares View -->
-      <div class="modal-content-full" v-else-if="addModalStep === 5" style="background: #121214; min-height: 100vh; padding: 0 16px; color: #ffffff;">
+      <div class="modal-content-full" v-else-if="addModalStep === 5" style="background: var(--color-bg); min-height: 100vh; padding: 0 16px; color: var(--color-text);">
         <!-- Header -->
-        <div class="modal-navbar" style="background: #121214; padding-bottom: 16px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255, 255, 255, 0.05);">
-          <button class="nav-back-circle" @click="addModalStep = 4" title="返回" style="background: #2c2c2e; color: #ffffff; width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; border: none; cursor: pointer;">
+        <div class="modal-navbar" style="background: var(--color-bg); padding-bottom: 16px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--color-card-border);">
+          <button class="nav-back-circle" @click="addModalStep = 4" title="返回" style="background: rgba(0, 0, 0, 0.05); color: var(--color-text); width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; border: none; cursor: pointer;">
             <PhCaretLeft size="20" weight="bold" />
           </button>
-          <button @click="addModalStep = 4" style="background: none; border: none; color: #ffffff; font-size: 1rem; font-weight: bold; cursor: pointer;">
+          <button @click="addModalStep = 4" style="background: none; border: none; color: var(--color-text); font-size: 1rem; font-weight: bold; cursor: pointer;">
             取消
           </button>
         </div>
 
         <div v-if="selectedInvestment" style="text-align: left; margin-top: 16px;">
           <!-- Title & Symbol -->
-          <div style="font-size: 1.25rem; font-weight: 800; color: #ffffff;">{{ selectedInvestment.name }}</div>
-          <div style="font-size: 0.85rem; color: #828e9e; margin-top: 2px; font-weight: 600;">{{ selectedInvestment.symbol }}</div>
+          <div style="font-size: 1.25rem; font-weight: 800; color: var(--color-text);">{{ selectedInvestment.name }}</div>
+          <div style="font-size: 0.85rem; color: var(--color-text-muted); margin-top: 2px; font-weight: 600;">{{ selectedInvestment.symbol }}</div>
 
           <!-- Quantity input -->
           <div style="margin-top: 32px; position: relative;">
-            <div style="font-size: 0.9rem; color: #828e9e; font-weight: 700; margin-bottom: 8px;">股數</div>
-            <div style="display: flex; align-items: baseline; border-bottom: 1px solid rgba(255, 255, 255, 0.1); padding-bottom: 8px;">
+            <div style="font-size: 0.9rem; color: var(--color-text-muted); font-weight: 700; margin-bottom: 8px;">股數</div>
+            <div style="display: flex; align-items: baseline; border-bottom: 1px solid rgba(0, 0, 0, 0.15); padding-bottom: 8px;">
               <input 
                 v-model.number="adjustSharesVal" 
                 type="number" 
                 placeholder="0" 
                 class="reset-input"
-                style="background: transparent; border: none; color: #ffffff; font-size: 3rem; font-weight: 800; width: 100%; outline: none; font-family: var(--font-display); padding: 0 !important; margin: 0 !important;"
+                style="background: transparent; border: none; color: var(--color-text); font-size: 3rem; font-weight: 800; width: 100%; outline: none; font-family: var(--font-display); padding: 0 !important; margin: 0 !important;"
               />
             </div>
           </div>
 
           <!-- Form Fields -->
           <div style="margin-top: 24px; display: flex; flex-direction: column; gap: 18px;">
-            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 12px;">
-              <span style="color: #828e9e; font-size: 0.95rem;">備註</span>
-              <input v-model="adjustRemarks" class="reset-input" style="background: transparent; border: none; color: #ffffff; font-size: 0.95rem; text-align: right; outline: none; width: 60%; padding: 0 !important; margin: 0 !important;" />
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(0, 0, 0, 0.06); padding-bottom: 12px;">
+              <span style="color: var(--color-text-muted); font-size: 0.95rem;">備註</span>
+              <input v-model="adjustRemarks" class="reset-input" style="background: transparent; border: none; color: var(--color-text); font-size: 0.95rem; text-align: right; outline: none; width: 60%; padding: 0 !important; margin: 0 !important;" />
             </div>
 
-            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 12px;">
-              <span style="color: #828e9e; font-size: 0.95rem;">價格</span>
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(0, 0, 0, 0.06); padding-bottom: 12px;">
+              <span style="color: var(--color-text-muted); font-size: 0.95rem;">價格</span>
               <div style="display: flex; align-items: center; gap: 6px;">
-                <span style="background: #2c2c2e; padding: 6px 12px; border-radius: 20px; font-size: 0.85rem; font-weight: bold; color: #ffffff; display: flex; align-items: center;">
+                <span style="background: rgba(0, 0, 0, 0.05); padding: 6px 12px; border-radius: 20px; font-size: 0.85rem; font-weight: bold; color: var(--color-text); display: flex; align-items: center;">
                   {{ selectedInvestment.currency }} 
-                  <input v-model.number="adjustPrice" type="number" step="any" class="reset-input" style="background: transparent; border: none; color: #ffffff; font-size: 0.85rem; font-weight: bold; outline: none; width: 60px; margin-left: 4px; text-align: right; padding: 0 !important; margin: 0 !important;" />
+                  <input v-model.number="adjustPrice" type="number" step="any" class="reset-input" style="background: transparent; border: none; color: var(--color-text); font-size: 0.85rem; font-weight: bold; outline: none; width: 60px; margin-left: 4px; text-align: right; padding: 0 !important; margin: 0 !important;" />
                 </span>
               </div>
             </div>
@@ -2931,9 +3192,9 @@ onActivated(() => {
                 fontSize: '1.5rem',
                 fontWeight: 'bold',
                 cursor: 'pointer',
-                background: adjustAction === 'plus' ? '#2c2c2e' : 'rgba(255,255,255,0.05)',
-                color: '#ffffff',
-                border: adjustAction === 'plus' ? '1px solid rgba(255,255,255,0.15)' : 'none'
+                background: adjustAction === 'plus' ? 'var(--color-primary)' : 'rgba(0,0,0,0.04)',
+                color: adjustAction === 'plus' ? '#ffffff' : 'var(--color-text)',
+                border: 'none'
               }"
             >
               +
@@ -2948,9 +3209,9 @@ onActivated(() => {
                 fontSize: '1.5rem',
                 fontWeight: 'bold',
                 cursor: 'pointer',
-                background: adjustAction === 'minus' ? '#2c2c2e' : 'rgba(255,255,255,0.05)',
-                color: '#ffffff',
-                border: adjustAction === 'minus' ? '1px solid rgba(255,255,255,0.15)' : 'none'
+                background: adjustAction === 'minus' ? 'var(--color-primary)' : 'rgba(0,0,0,0.04)',
+                color: adjustAction === 'minus' ? '#ffffff' : 'var(--color-text)',
+                border: 'none'
               }"
             >
               -
@@ -2959,13 +3220,13 @@ onActivated(() => {
 
           <!-- Live values -->
           <div style="margin-top: 24px; text-align: left; font-family: var(--font-display);">
-            <div style="font-size: 1.1rem; font-weight: bold; color: #5c67f5;">
+            <div style="font-size: 1.1rem; font-weight: bold; color: var(--color-primary);">
               {{ adjustAction === 'plus' ? '+' : '-' }}{{ formatInvestCurrency((Number(adjustSharesVal || 0) * Number(adjustPrice || 0)), selectedInvestment.currency) }}
             </div>
-            <div style="font-size: 0.9rem; color: #828e9e; margin-top: 6px; font-weight: 500;">
+            <div style="font-size: 0.9rem; color: var(--color-text-muted); margin-top: 6px; font-weight: 500;">
               餘額 {{ formatInvestCurrency(Math.max(0, selectedInvestment.quantity + (adjustAction === 'plus' ? Number(adjustSharesVal || 0) : -Number(adjustSharesVal || 0))) * Number(adjustPrice || 0), selectedInvestment.currency) }}
             </div>
-            <div style="font-size: 0.9rem; color: #828e9e; margin-top: 4px; font-weight: 500;">
+            <div style="font-size: 0.9rem; color: var(--color-text-muted); margin-top: 4px; font-weight: 500;">
               持有 {{ Math.max(0, selectedInvestment.quantity + (adjustAction === 'plus' ? Number(adjustSharesVal || 0) : -Number(adjustSharesVal || 0))) }}
             </div>
           </div>
@@ -2974,7 +3235,7 @@ onActivated(() => {
           <button 
             @click="submitAdjustShares" 
             :disabled="!adjustSharesVal || adjustSharesVal <= 0"
-            style="width: 100%; padding: 16px; border-radius: 16px; background: #ffffff; color: #121214; border: none; font-weight: bold; font-size: 1.05rem; margin-top: 36px; cursor: pointer; transition: opacity 0.2s;"
+            style="width: 100%; padding: 16px; border-radius: 16px; background: var(--color-primary); color: #ffffff; border: none; font-weight: bold; font-size: 1.05rem; margin-top: 36px; cursor: pointer; transition: opacity 0.2s;"
             :style="{ opacity: (!adjustSharesVal || adjustSharesVal <= 0) ? '0.4' : '1' }"
           >
             完成
@@ -2983,56 +3244,56 @@ onActivated(() => {
       </div>
 
       <!-- Step 6: Modify Balance View -->
-      <div class="modal-content-full" v-else-if="addModalStep === 6" style="background: #121214; min-height: 100vh; padding: 0 16px; color: #ffffff;">
+      <div class="modal-content-full" v-else-if="addModalStep === 6" style="background: var(--color-bg); min-height: 100vh; padding: 0 16px; color: var(--color-text);">
         <!-- Header -->
-        <div class="modal-navbar" style="background: #121214; padding-bottom: 16px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255, 255, 255, 0.05);">
-          <button class="nav-back-circle" @click="addModalStep = 4" title="返回" style="background: #2c2c2e; color: #ffffff; width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; border: none; cursor: pointer;">
+        <div class="modal-navbar" style="background: var(--color-bg); padding-bottom: 16px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--color-card-border);">
+          <button class="nav-back-circle" @click="addModalStep = 4" title="返回" style="background: rgba(0, 0, 0, 0.05); color: var(--color-text); width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; border: none; cursor: pointer;">
             <PhCaretLeft size="20" weight="bold" />
           </button>
-          <button @click="addModalStep = 4" style="background: none; border: none; color: #ffffff; font-size: 1rem; font-weight: bold; cursor: pointer;">
+          <button @click="addModalStep = 4" style="background: none; border: none; color: var(--color-text); font-size: 1rem; font-weight: bold; cursor: pointer;">
             取消
           </button>
         </div>
 
         <div v-if="selectedInvestment" style="text-align: left; margin-top: 16px;">
           <!-- Title & Symbol -->
-          <div style="font-size: 1.25rem; font-weight: 800; color: #ffffff;">{{ selectedInvestment.name }}</div>
-          <div style="font-size: 0.85rem; color: #828e9e; margin-top: 2px; font-weight: 600;">{{ selectedInvestment.symbol }}</div>
+          <div style="font-size: 1.25rem; font-weight: 800; color: var(--color-text);">{{ selectedInvestment.name }}</div>
+          <div style="font-size: 0.85rem; color: var(--color-text-muted); margin-top: 2px; font-weight: 600;">{{ selectedInvestment.symbol }}</div>
 
           <!-- Quantity input -->
           <div style="margin-top: 32px; position: relative;">
-            <div style="font-size: 0.9rem; color: #828e9e; font-weight: 700; margin-bottom: 8px;">股數</div>
-            <div style="display: flex; align-items: baseline; border-bottom: 1px solid rgba(255, 255, 255, 0.1); padding-bottom: 8px;">
+            <div style="font-size: 0.9rem; color: var(--color-text-muted); font-weight: 700; margin-bottom: 8px;">股數</div>
+            <div style="display: flex; align-items: baseline; border-bottom: 1px solid rgba(0, 0, 0, 0.15); padding-bottom: 8px;">
               <input 
                 v-model.number="modifySharesVal" 
                 type="number" 
                 placeholder="0" 
                 class="reset-input"
-                style="background: transparent; border: none; color: #ffffff; font-size: 3rem; font-weight: 800; width: 100%; outline: none; font-family: var(--font-display); padding: 0 !important; margin: 0 !important;"
+                style="background: transparent; border: none; color: var(--color-text); font-size: 3rem; font-weight: 800; width: 100%; outline: none; font-family: var(--font-display); padding: 0 !important; margin: 0 !important;"
               />
             </div>
           </div>
 
           <!-- Form Fields -->
           <div style="margin-top: 24px; display: flex; flex-direction: column; gap: 18px;">
-            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 12px;">
-              <span style="color: #828e9e; font-size: 0.95rem;">備註</span>
-              <input v-model="modifyRemarks" class="reset-input" style="background: transparent; border: none; color: #ffffff; font-size: 0.95rem; text-align: right; outline: none; width: 60%; padding: 0 !important; margin: 0 !important;" />
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(0, 0, 0, 0.06); padding-bottom: 12px;">
+              <span style="color: var(--color-text-muted); font-size: 0.95rem;">備註</span>
+              <input v-model="modifyRemarks" class="reset-input" style="background: transparent; border: none; color: var(--color-text); font-size: 0.95rem; text-align: right; outline: none; width: 60%; padding: 0 !important; margin: 0 !important;" />
             </div>
 
-            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 12px;">
-              <span style="color: #828e9e; font-size: 0.95rem;">價格</span>
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(0, 0, 0, 0.06); padding-bottom: 12px;">
+              <span style="color: var(--color-text-muted); font-size: 0.95rem;">價格</span>
               <div style="display: flex; align-items: center; gap: 6px;">
-                <span style="background: #2c2c2e; padding: 6px 12px; border-radius: 20px; font-size: 0.85rem; font-weight: bold; color: #ffffff; display: flex; align-items: center;">
+                <span style="background: rgba(0, 0, 0, 0.05); padding: 6px 12px; border-radius: 20px; font-size: 0.85rem; font-weight: bold; color: var(--color-text); display: flex; align-items: center;">
                   {{ selectedInvestment.currency }} 
-                  <input v-model.number="modifyPrice" type="number" step="any" class="reset-input" style="background: transparent; border: none; color: #ffffff; font-size: 0.85rem; font-weight: bold; outline: none; width: 60px; margin-left: 4px; text-align: right; padding: 0 !important; margin: 0 !important;" />
+                  <input v-model.number="modifyPrice" type="number" step="any" class="reset-input" style="background: transparent; border: none; color: var(--color-text); font-size: 0.85rem; font-weight: bold; outline: none; width: 60px; margin-left: 4px; text-align: right; padding: 0 !important; margin: 0 !important;" />
                 </span>
               </div>
             </div>
 
-            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 12px;">
-              <span style="color: #828e9e; font-size: 0.95rem;">當前餘額</span>
-              <span style="color: #ffffff; font-size: 0.95rem; font-weight: 700; font-family: var(--font-display);">
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(0, 0, 0, 0.06); padding-bottom: 12px;">
+              <span style="color: var(--color-text-muted); font-size: 0.95rem;">當前餘額</span>
+              <span style="color: var(--color-text); font-size: 0.95rem; font-weight: 700; font-family: var(--font-display);">
                 {{ formatInvestCurrency((Number(modifySharesVal || 0) * Number(modifyPrice || 0)), selectedInvestment.currency) }}
               </span>
             </div>
@@ -3041,9 +3302,99 @@ onActivated(() => {
           <!-- Submit Button -->
           <button 
             @click="submitModifyBalance" 
-            style="width: 100%; padding: 16px; border-radius: 16px; background: #ffffff; color: #121214; border: none; font-weight: bold; font-size: 1.05rem; margin-top: 36px; cursor: pointer; transition: opacity 0.2s;"
+            style="width: 100%; padding: 16px; border-radius: 16px; background: var(--color-primary); color: #ffffff; border: none; font-weight: bold; font-size: 1.05rem; margin-top: 36px; cursor: pointer; transition: opacity 0.2s;"
           >
             完成
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Custom Delete Confirmation Modal ── -->
+    <div v-if="showDeleteConfirm" class="modal-overlay" style="z-index: 4000; background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;">
+      <div class="card" style="width: 90%; max-width: 320px; padding: 1.5rem; text-align: center; border: 1px solid var(--color-card-border); background: var(--color-card-bg); box-shadow: var(--shadow-lg); display: flex; flex-direction: column; gap: 1rem;">
+        <h3 style="margin: 0; font-size: 1.15rem; color: var(--color-text); font-weight: 800;">確認刪除</h3>
+        <p style="margin: 0; font-size: 0.9rem; color: var(--color-text-muted); line-height: 1.5;">
+          {{ deleteConfirmMessage }}
+        </p>
+        <div style="display: flex; gap: 12px; margin-top: 0.5rem;">
+          <button @click="cancelDelete" style="flex: 1; height: 40px; padding: 0; background: rgba(0, 0, 0, 0.05); color: var(--color-text); border: none; font-weight: 700; border-radius: 12px; cursor: pointer; transition: all 0.2s; box-shadow: none;" onmouseover="this.style.background='rgba(0,0,0,0.08)'" onmouseout="this.style.background='rgba(0,0,0,0.05)'">
+            取消
+          </button>
+          <button @click="confirmDelete" style="flex: 1; height: 40px; padding: 0; background: var(--color-danger); color: white; border: none; font-weight: 700; border-radius: 12px; cursor: pointer; transition: all 0.2s; box-shadow: 0 4px 12px rgba(224, 59, 84, 0.2);" onmouseover="this.style.opacity='0.9'" onmouseout="this.style.opacity='1'">
+            確認刪除
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Create Group Modal ── -->
+    <div v-if="showCreateGroupModal" class="modal-overlay" style="z-index: 3000; background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;">
+      <div class="card" style="width: 90%; max-width: 340px; padding: 1.5rem; border: 1px solid var(--color-card-border); background: var(--color-card-bg); box-shadow: var(--shadow-lg); display: flex; flex-direction: column; gap: 1.2rem;">
+        <h3 style="margin: 0; font-size: 1.15rem; color: var(--color-text); font-weight: 800; text-align: center;">🏷️ 新增自訂群組</h3>
+        <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+          <label style="font-size: 0.85rem; color: var(--color-text-muted); font-weight: bold; text-align: left;">群組名稱</label>
+          <input v-model="newGroupName" placeholder="例如：退休基金、緊急預備金" style="width: 100%; height: 44px; padding: 0 12px; border-radius: 12px; border: 1px solid rgba(0,0,0,0.08); background: #f8fafc; color: var(--color-text); font-size: 0.95rem; outline: none; box-sizing: border-box;" />
+        </div>
+        <div style="display: flex; gap: 12px;">
+          <button @click="showCreateGroupModal = false" style="flex: 1; height: 40px; padding: 0; background: rgba(0, 0, 0, 0.05); color: var(--color-text); border: none; font-weight: 700; border-radius: 12px; cursor: pointer; transition: all 0.2s; box-shadow: none;" onmouseover="this.style.background='rgba(0,0,0,0.08)'" onmouseout="this.style.background='rgba(0,0,0,0.05)'">
+            取消
+          </button>
+          <button @click="submitCreateGroup" style="flex: 1; height: 40px; padding: 0; background: var(--color-primary); color: white; border: none; font-weight: 700; border-radius: 12px; cursor: pointer; transition: all 0.2s; box-shadow: 0 4px 12px rgba(26, 30, 38, 0.1);" onmouseover="this.style.opacity='0.9'" onmouseout="this.style.opacity='1'">
+            儲存
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Manage Group Modal ── -->
+    <div v-if="showManageGroupModal" class="modal-overlay" style="z-index: 3000; background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;">
+      <div class="card" style="width: 90%; max-width: 420px; max-height: 80vh; padding: 1.5rem; border: 1px solid var(--color-card-border); background: var(--color-card-bg); box-shadow: var(--shadow-lg); display: flex; flex-direction: column; gap: 1.2rem; overflow: hidden; box-sizing: border-box;">
+        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(0,0,0,0.06); padding-bottom: 0.8rem;">
+          <h3 style="margin: 0; font-size: 1.15rem; color: var(--color-text); font-weight: 800;">⚙️ 管理群組：{{ selectedGroupToManage }}</h3>
+          <button @click="showManageGroupModal = false" style="background: none; border: none; color: var(--color-text-muted); cursor: pointer; padding: 4px; font-size: 1.5rem; line-height: 1; display: flex; align-items: center; justify-content: center;">
+            &times;
+          </button>
+        </div>
+
+        <!-- Add item to group -->
+        <div style="display: flex; flex-direction: column; gap: 0.5rem; background: rgba(0,0,0,0.02); padding: 1rem; border-radius: 12px; box-sizing: border-box;">
+          <label style="font-size: 0.85rem; color: var(--color-text); font-weight: bold; text-align: left; display: block;">加到群組</label>
+          <div style="display: flex; gap: 8px; width: 100%; box-sizing: border-box;">
+            <select v-model="selectedItemToAddToGroup" style="flex: 1; height: 40px; padding: 0 10px; border-radius: 10px; border: 1px solid rgba(0,0,0,0.08); background: white; color: var(--color-text); font-size: 0.9rem; outline: none; width: 70%; min-width: 0;">
+              <option value="" disabled>-- 選擇資產或投資 --</option>
+              <option v-for="item in getAvailableItemsForGroup" :key="item.id" :value="JSON.stringify({id: item.id, type: item.type})">
+                {{ item.name }}
+              </option>
+            </select>
+            <button @click="addItemToGroup" style="height: 40px; padding: 0 16px; background: var(--color-primary); color: white; border: none; font-weight: bold; border-radius: 10px; cursor: pointer; flex-shrink: 0;" :disabled="!selectedItemToAddToGroup">
+              加入
+            </button>
+          </div>
+        </div>
+
+        <!-- Current Members List -->
+        <div style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 0.6rem; min-height: 150px; padding-right: 4px;">
+          <label style="font-size: 0.85rem; color: var(--color-text-muted); font-weight: bold; text-align: left; display: block;">群組成員列表 ({{ getGroupMembers(selectedGroupToManage).length }})</label>
+          
+          <div v-if="getGroupMembers(selectedGroupToManage).length === 0" style="text-align: center; color: var(--color-text-muted); font-size: 0.85rem; padding: 2rem 0; opacity: 0.7;">
+            此群組目前沒有任何項目
+          </div>
+
+          <div v-else v-for="member in getGroupMembers(selectedGroupToManage)" :key="member.id" style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: white; border: 1px solid rgba(0,0,0,0.04); border-radius: 10px; box-shadow: 0 1px 2px rgba(0,0,0,0.01);">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span style="font-size: 1.1rem;">{{ member.type === 'account' ? '🏦' : '📈' }}</span>
+              <span style="font-size: 0.9rem; color: var(--color-text); font-weight: 600;">{{ member.name }}</span>
+            </div>
+            <button @click="removeItemFromGroup(member.id, member.type)" style="background: none; border: none; color: var(--color-danger); font-size: 0.8rem; font-weight: bold; cursor: pointer; padding: 4px 8px; border-radius: 6px; transition: all 0.2s;" onmouseover="this.style.background='rgba(224, 59, 84, 0.05)'" onmouseout="this.style.background='none'">
+              移除
+            </button>
+          </div>
+        </div>
+
+        <div style="border-top: 1px solid rgba(0,0,0,0.06); padding-top: 0.8rem; text-align: right; flex-shrink: 0;">
+          <button @click="showManageGroupModal = false" style="height: 38px; padding: 0 20px; background: rgba(0, 0, 0, 0.05); color: var(--color-text); border: none; font-weight: 700; border-radius: 10px; cursor: pointer;">
+            關閉
           </button>
         </div>
       </div>
@@ -3544,7 +3895,7 @@ onActivated(() => {
 .modal-overlay {
   position: absolute;
   top: 0; left: 0; right: 0; bottom: 0;
-  background: #121214;
+  background: var(--color-bg);
   z-index: 2000;
   display: flex;
   flex-direction: column;
@@ -3558,7 +3909,7 @@ onActivated(() => {
   align-items: center;
   width: 100%;
   padding: 16px 18px;
-  background: #121214;
+  background: var(--color-bg);
   position: sticky;
   top: 0;
   z-index: 2010;
@@ -3569,9 +3920,9 @@ onActivated(() => {
   width: 36px;
   height: 36px;
   border-radius: 50%;
-  background: #2c2c2e;
+  background: rgba(0, 0, 0, 0.05);
   border: none;
-  color: #ffffff;
+  color: var(--color-text);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3582,11 +3933,11 @@ onActivated(() => {
 }
 
 .nav-back-circle:hover {
-  background: #3a3a3c;
+  background: rgba(0, 0, 0, 0.08);
 }
 
 .nav-title {
-  color: #ffffff;
+  color: var(--color-text);
   font-size: 1.15rem;
   font-weight: 700;
   text-align: center;
@@ -3666,13 +4017,13 @@ onActivated(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: #1c1c1e !important;
-  border: none;
+  background: var(--color-card-bg) !important;
+  border: 1px solid var(--color-card-border) !important;
   border-radius: 16px;
   height: 54px;
   padding: 0 20px;
   width: 100%;
-  color: #ffffff;
+  color: var(--color-text);
   cursor: pointer;
   box-shadow: none !important;
   transition: background 0.2s ease;
@@ -3680,7 +4031,7 @@ onActivated(() => {
 }
 
 .sub-type-item:hover {
-  background: #2c2c2e !important;
+  background: rgba(0, 0, 0, 0.02) !important;
 }
 
 .sub-item-left {
@@ -3694,7 +4045,7 @@ onActivated(() => {
 }
 
 .chevron-icon {
-  color: rgba(255, 255, 255, 0.4);
+  color: rgba(0, 0, 0, 0.3);
 }
 
 .text-green { color: #2ebd59 !important; }
@@ -3721,7 +4072,7 @@ onActivated(() => {
 .form-group label {
   font-size: 0.8rem;
   font-weight: 700;
-  color: rgba(255, 255, 255, 0.5);
+  color: var(--color-text-muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   padding-left: 4px;
@@ -3735,9 +4086,9 @@ onActivated(() => {
 
 .modal-overlay input:not(.reset-input):not(.input-flat-right),
 .modal-overlay select:not(.select-flat-right) {
-  background: #1c1c1e !important;
-  border: 1px solid rgba(255, 255, 255, 0.1) !important;
-  color: #ffffff !important;
+  background: #f1f5f9 !important;
+  border: 1px solid rgba(0, 0, 0, 0.08) !important;
+  color: var(--color-text) !important;
   border-radius: 12px !important;
   padding: 12px 14px !important;
   font-size: 0.95rem !important;
@@ -3787,12 +4138,12 @@ onActivated(() => {
 }
 
 .btn-cancel {
-  background: #2c2c2e !important;
-  color: #ffffff !important;
+  background: rgba(0, 0, 0, 0.05) !important;
+  color: var(--color-text) !important;
 }
 
 .btn-cancel:hover {
-  background: #3a3a3c !important;
+  background: rgba(0, 0, 0, 0.08) !important;
 }
 
 .btn-save {
@@ -3853,14 +4204,14 @@ onActivated(() => {
   left: 50%;
   transform: translateX(-50%);
   z-index: 3000;
-  background: rgba(30, 30, 32, 0.95);
+  background: rgba(255, 255, 255, 0.95);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
-  border: 1px solid rgba(255,255,255,0.08);
-  color: white;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  color: var(--color-text);
   padding: 12px 24px;
   border-radius: 50px;
-  box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+  box-shadow: var(--shadow-lg);
   display: flex;
   align-items: center;
   gap: 8px;
@@ -3878,12 +4229,14 @@ onActivated(() => {
 
 /* Dark Card Form Styles */
 .form-card-black {
-  background: #1c1c1e;
+  background: var(--color-card-bg);
+  border: 1px solid var(--color-card-border);
   border-radius: 16px;
   padding: 0 16px;
   display: flex;
   flex-direction: column;
   margin-bottom: 20px;
+  box-shadow: var(--shadow-sm);
 }
 
 .form-item-row {
@@ -3891,11 +4244,11 @@ onActivated(() => {
   justify-content: space-between;
   align-items: center;
   padding: 16px 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
 }
 
 .row-label {
-  color: #ffffff;
+  color: var(--color-text);
   font-size: 0.95rem;
   font-weight: 700;
 }
@@ -3909,7 +4262,7 @@ onActivated(() => {
 .input-flat-right {
   background: transparent !important;
   border: none !important;
-  color: #ffffff !important;
+  color: var(--color-text) !important;
   text-align: right !important;
   font-size: 0.95rem !important;
   width: 200px !important;
@@ -3924,7 +4277,7 @@ onActivated(() => {
 .select-flat-right {
   background: transparent !important;
   border: none !important;
-  color: #ffffff !important;
+  color: var(--color-text) !important;
   text-align: right !important;
   font-size: 0.95rem !important;
   width: auto !important;
@@ -3936,8 +4289,8 @@ onActivated(() => {
 }
 
 .currency-badge {
-  background: #ffffff;
-  color: #121212;
+  background: rgba(0, 0, 0, 0.05);
+  color: var(--color-text);
   padding: 4px 8px;
   border-radius: 20px;
   font-size: 0.76rem;
@@ -3962,7 +4315,7 @@ onActivated(() => {
   position: absolute;
   cursor: pointer;
   top: 0; left: 0; right: 0; bottom: 0;
-  background-color: #3a3a3c;
+  background-color: #cbd5e1;
   transition: .3s;
   border-radius: 34px;
 }
@@ -3999,19 +4352,19 @@ onActivated(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-  color: #ffffff;
+  color: var(--color-text);
   font-size: 0.95rem;
   font-weight: 700;
 }
 
 .auto-record-icon {
-  color: rgba(255, 255, 255, 0.6);
+  color: var(--color-text-muted);
 }
 
 .btn-add-auto-record {
   background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.3);
-  color: #ffffff;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  color: var(--color-text);
   padding: 6px 14px;
   border-radius: 20px;
   font-size: 0.8rem;
@@ -4022,8 +4375,8 @@ onActivated(() => {
 }
 
 .btn-add-auto-record:hover {
-  background: rgba(255, 255, 255, 0.06);
-  border-color: rgba(255, 255, 255, 0.6);
+  background: rgba(0, 0, 0, 0.02);
+  border-color: rgba(0, 0, 0, 0.3);
 }
 
 .auto-record-info-badge {
@@ -4061,20 +4414,22 @@ onActivated(() => {
 .auto-record-info-card {
   display: flex;
   gap: 10px;
-  background: #1c1c1e;
+  background: var(--color-card-bg);
+  border: 1px solid var(--color-card-border);
   border-radius: 16px;
   padding: 16px;
   align-items: flex-start;
+  box-shadow: var(--shadow-sm);
 }
 
 .info-icon {
-  color: rgba(255, 255, 255, 0.4);
+  color: var(--color-text-muted);
   flex-shrink: 0;
   margin-top: 2px;
 }
 
 .info-text {
-  color: rgba(255, 255, 255, 0.6);
+  color: var(--color-text-muted);
   font-size: 0.8rem;
   line-height: 1.4;
   text-align: left;
@@ -4083,7 +4438,7 @@ onActivated(() => {
 /* Segmented Control (Tabs) */
 .segmented-control {
   display: flex;
-  background: #1c1c1e;
+  background: rgba(0, 0, 0, 0.04);
   border-radius: 12px;
   padding: 4px;
   width: 100%;
@@ -4094,7 +4449,7 @@ onActivated(() => {
   flex: 1;
   border: none;
   background: transparent !important;
-  color: rgba(255, 255, 255, 0.6) !important;
+  color: var(--color-text-muted) !important;
   font-size: 0.95rem;
   font-weight: 700;
   height: 38px;
@@ -4131,8 +4486,8 @@ onActivated(() => {
   transition: all 0.2s ease;
   box-shadow: none !important;
   background: transparent !important;
-  color: #ffffff !important;
-  border: 1px solid #ffffff !important;
+  color: var(--color-text) !important;
+  border: 1px solid rgba(0, 0, 0, 0.15) !important;
 }
 
 .expiry-pill.active {
@@ -4145,7 +4500,7 @@ onActivated(() => {
 .minus-circle-btn {
   background: transparent;
   border: none;
-  color: rgba(255, 255, 255, 0.6);
+  color: var(--color-text-muted);
   cursor: pointer;
   padding: 0;
   display: flex;
@@ -4156,7 +4511,7 @@ onActivated(() => {
 }
 
 .minus-circle-btn:hover {
-  color: #ffffff;
+  color: var(--color-text);
 }
 
 /* Invisible select overlay style */
@@ -4180,7 +4535,7 @@ onActivated(() => {
 
 .row-sublabel {
   font-size: 0.72rem;
-  color: rgba(255, 255, 255, 0.4);
+  color: var(--color-text-muted);
   font-weight: 500;
   margin-top: 2px;
 }
@@ -4188,7 +4543,7 @@ onActivated(() => {
 /* Date and Tag styles */
 .next-time-hint {
   font-size: 0.8rem;
-  color: rgba(255, 255, 255, 0.4);
+  color: var(--color-text-muted);
   text-align: right;
   margin-top: -8px;
   margin-bottom: 8px;
@@ -4214,7 +4569,7 @@ onActivated(() => {
 }
 
 .row-label-gray {
-  color: rgba(255, 255, 255, 0.4);
+  color: var(--color-text-muted);
   font-size: 0.95rem;
   font-weight: 700;
 }
@@ -4226,7 +4581,7 @@ onActivated(() => {
 }
 
 .provider-type-text {
-  color: #ffffff;
+  color: var(--color-text);
   font-size: 0.95rem;
   font-weight: 700;
 }
@@ -4235,7 +4590,7 @@ onActivated(() => {
   width: 36px;
   height: 36px;
   border-radius: 50%;
-  background: #2c2c2e;
+  background: rgba(0, 0, 0, 0.05);
   border: none;
   color: #2ebd59;
   display: flex;
@@ -4248,13 +4603,13 @@ onActivated(() => {
 }
 
 .nav-save-circle:hover {
-  background: #3a3a3c;
+  background: rgba(0, 0, 0, 0.08);
 }
 
 .mini-spinner {
   width: 16px;
   height: 16px;
-  border: 2px solid rgba(255, 255, 255, 0.1);
+  border: 2px solid rgba(0, 0, 0, 0.05);
   border-top: 2px solid #2ebd59;
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
@@ -4265,7 +4620,7 @@ onActivated(() => {
   transition: transform 0.2s ease;
 }
 .caret-indicator-white {
-  color: #ffffff;
+  color: var(--color-text);
   transition: transform 0.2s ease;
 }
 

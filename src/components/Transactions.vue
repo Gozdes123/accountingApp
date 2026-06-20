@@ -186,7 +186,7 @@ const handleAddTransaction = (transaction) => {
 .view-toggle {
   display: flex;
   margin: 0 1rem 1rem 1rem;
-  background: rgba(255, 255, 255, 0.05);
+  background: rgba(0, 0, 0, 0.04);
   padding: 4px;
   border-radius: 12px;
 }
@@ -209,17 +209,17 @@ const handleAddTransaction = (transaction) => {
 }
 
 .view-toggle button.active {
-  background: rgba(255, 255, 255, 0.1);
-  color: white;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  background: #ffffff;
+  color: var(--color-text);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
 }
 
 .sub-summary {
   margin-right: auto;
-  background: rgba(59, 130, 246, 0.1);
+  background: var(--color-primary-bg);
   padding: 4px 12px;
   border-radius: 20px;
-  border: 1px solid rgba(59, 130, 246, 0.2);
+  border: 1px solid rgba(92, 103, 245, 0.15);
 }
 
 .empty-state {
@@ -234,10 +234,10 @@ const handleAddTransaction = (transaction) => {
   justify-content: space-between;
   align-items: center;
   padding: 1rem;
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--color-card-bg);
   margin-bottom: 0.5rem;
   border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--color-card-border);
 }
 
 .sub-name {
@@ -261,7 +261,7 @@ const handleAddTransaction = (transaction) => {
 
 .icon-btn {
   background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(0, 0, 0, 0.08);
   color: var(--color-text-muted);
   width: 40px;
   height: 40px;
@@ -293,9 +293,9 @@ const handleAddTransaction = (transaction) => {
 .form-group select {
   width: 100%;
   padding: 0.6rem;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  color: white;
+  background: #f1f5f9;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  color: var(--color-text);
   border-radius: 8px;
 }
 
@@ -311,7 +311,7 @@ const handleAddTransaction = (transaction) => {
   gap: 6px;
   color: white;
   cursor: pointer;
-  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
+  box-shadow: 0 4px 12px rgba(92, 103, 245, 0.2);
   font-size: 0.9rem;
   font-weight: 500;
   transition: transform 0.2s, box-shadow 0.2s;
@@ -343,7 +343,7 @@ const handleAddTransaction = (transaction) => {
   left: 0;
   width: 100%;
   height: 100%;
-  background: rgba(0, 0, 0, 0.8);
+  background: rgba(0, 0, 0, 0.4);
   backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
@@ -352,7 +352,7 @@ const handleAddTransaction = (transaction) => {
 }
 
 .modal-content {
-  background: #1e293b;
+  background: var(--color-card-bg);
   padding: 1.25rem 1rem;
   /* reduced from 1.5rem */
   border-radius: 16px;
@@ -362,8 +362,8 @@ const handleAddTransaction = (transaction) => {
   display: flex;
   flex-direction: column;
   gap: 1rem;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+  border: 1px solid var(--color-card-border);
+  box-shadow: var(--shadow-lg);
 }
 
 .modal-header {
@@ -376,6 +376,7 @@ const handleAddTransaction = (transaction) => {
 .modal-header h3 {
   margin: 0;
   font-size: 1.2rem;
+  color: var(--color-text);
 }
 
 .close-btn {

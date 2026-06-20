@@ -4,13 +4,13 @@
   --line-height: 1.5;
   --font-weight: 400;
 
-  /* Color Palette - Premium Percento Light Theme */
-  --color-bg: #f3f5f8;
+  /* Color Palette - Premium Light Theme (白底, 天亮模式) */
+  --color-bg: #f8fafc;
   --color-card-bg: #ffffff;
-  --color-card-border: transparent;
+  --color-card-border: rgba(0, 0, 0, 0.05);
   
-  --color-text: #1a1e26;
-  --color-text-muted: #828e9e;
+  --color-text: #0f172a;
+  --color-text-muted: #64748b;
   
   --color-primary: #5c67f5;       /* Percento Royal Blue */
   --color-primary-hover: #4853db;
@@ -19,14 +19,14 @@
   --color-success: #2ec173;       /* Mint Green */
 
   /* Glowing and Background Badges (Light theme) */
-  --color-primary-bg: rgba(92, 103, 245, 0.06);
-  --color-accent-bg: rgba(120, 57, 236, 0.06);
-  --color-success-bg: rgba(46, 193, 115, 0.06);
-  --color-danger-bg: rgba(224, 59, 84, 0.06);
+  --color-primary-bg: rgba(92, 103, 245, 0.08);
+  --color-accent-bg: rgba(120, 57, 236, 0.08);
+  --color-success-bg: rgba(46, 193, 115, 0.08);
+  --color-danger-bg: rgba(224, 59, 84, 0.08);
 
-  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.02);
-  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.03);
-  --shadow-lg: 0 16px 36px rgba(0, 0, 0, 0.05);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 18px rgba(0, 0, 0, 0.04);
+  --shadow-lg: 0 12px 30px rgba(0, 0, 0, 0.08);
 
   --radius-sm: 0.5rem;
   --radius-md: 0.85rem;
@@ -44,8 +44,8 @@ body {
   overscroll-behavior-y: none;
   background-color: var(--color-bg);
   background-image:
-    radial-gradient(at 0% 0%, rgba(92, 103, 245, 0.03) 0, transparent 40%),
-    radial-gradient(at 100% 0%, rgba(120, 57, 236, 0.03) 0, transparent 40%);
+    radial-gradient(at 0% 0%, rgba(92, 103, 245, 0.015) 0, transparent 40%),
+    radial-gradient(at 100% 0%, rgba(120, 57, 236, 0.015) 0, transparent 40%);
   color: var(--color-text);
   font-family: var(--font-family);
   -webkit-font-smoothing: antialiased;
@@ -130,7 +130,7 @@ select {
   margin-bottom: 1rem;
   border-radius: var(--radius-md);
   border: 1px solid rgba(0, 0, 0, 0.08);
-  background: #f8fafc;
+  background: #f1f5f9;
   color: var(--color-text);
   font-size: 0.95rem;
   font-family: var(--font-family);
@@ -196,10 +196,10 @@ input[type='number'] {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.06);
+  background: rgba(0, 0, 0, 0.12);
   border-radius: 99px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 0, 0, 0.15);
+  background: rgba(0, 0, 0, 0.24);
 }
