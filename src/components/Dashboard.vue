@@ -617,17 +617,35 @@ const groupedInvestmentsByCustomGroup = computed(() => {
     if (!grouped[g]) grouped[g] = []
     grouped[g].push(inv)
   })
+  
   const result = []
   Object.keys(grouped).forEach(k => {
+    const items = grouped[k]
+    const groupTotalValTwd = items.reduce((sum, item) => sum + item.valueTwd, 0)
+    const groupPct = totalInvestments.value > 0 ? (groupTotalValTwd / totalInvestments.value) * 100 : 0
+    
+    const itemsWithGroupPct = items.map(item => {
+      const itemGroupPct = groupTotalValTwd > 0 ? (item.valueTwd / groupTotalValTwd) * 100 : 0
+      return {
+        ...item,
+        groupPercentage: itemGroupPct
+      }
+    }).sort((a, b) => b.valueTwd - a.valueTwd)
+    
     if (k !== '') {
-      result.push({ name: k, items: grouped[k] })
+      result.push({ name: k, totalValueTwd: groupTotalValTwd, percentage: groupPct, items: itemsWithGroupPct })
+    } else {
+      result.push({ name: '未分類', totalValueTwd: groupTotalValTwd, percentage: groupPct, items: itemsWithGroupPct, isUnclassified: true })
     }
   })
-  result.sort((a, b) => a.name.localeCompare(b.name))
-  if (grouped[''] && grouped[''].length > 0) {
-    result.unshift({ name: '', items: grouped[''] })
+  
+  const namedGroups = result.filter(r => !r.isUnclassified).sort((a, b) => a.name.localeCompare(b.name))
+  const unclassified = result.find(r => r.isUnclassified)
+  
+  if (unclassified && unclassified.items.length > 0) {
+    namedGroups.push(unclassified)
   }
-  return result
+  return namedGroups
 })
 
 // 歷史趨勢折線圖篩選
@@ -1829,6 +1847,21 @@ const processAutoRecords = async () => {
 // ── Custom Group Management ──────────────────────────────────────
 const customGroupsList = ref(JSON.parse(localStorage.getItem('custom_groups') || '["台股", "美股", "流動資產"]'))
 
+const investGroupsExpanded = ref({})
+
+const toggleInvestGroup = (groupName) => {
+  if (investGroupsExpanded.value[groupName] === undefined) {
+    investGroupsExpanded.value[groupName] = false // Collapse if currently default expanded
+  } else {
+    investGroupsExpanded.value[groupName] = !investGroupsExpanded.value[groupName]
+  }
+}
+
+const isInvestGroupExpanded = (groupName) => {
+  return investGroupsExpanded.value[groupName] !== false
+}
+
+
 const syncGroups = () => {
   const dbGroups = new Set()
   if (Array.isArray(accounts.value)) {
@@ -2104,13 +2137,19 @@ onActivated(() => {
                     <div v-if="g.name" style="font-size: 0.8rem; color: var(--color-text-muted); font-weight: bold; margin-left: 8px; margin-top: 6px; text-transform: uppercase; text-align: left;">
                       {{ g.name }}
                     </div>
-                    <div v-for="acc in g.items" :key="acc.id" class="list-sub-item-card" @click.stop="editAccount(acc)">
-                      <div class="sub-item-left">
-                        <component :is="getTypeIconAndColor(acc.type).icon" class="sub-icon text-green" size="16" weight="duotone" />
-                        <span class="sub-item-name">{{ acc.name }}</span>
+                    <div v-for="acc in g.items" :key="acc.id" class="list-sub-item-card" @click.stop="editAccount(acc)" style="display: flex; justify-content: space-between; align-items: center; cursor: pointer;">
+                      <div class="sub-item-left" style="display: flex; align-items: center; gap: 8px;">
+                        <!-- Circle Percentage Badge for liquid assets -->
+                        <div class="sub-item-badge" style="background: rgba(92, 103, 245, 0.1); color: #5c67f5; font-weight: 800;">
+                          {{ totalLiquidAssets > 0 ? Math.round((acc.balance / totalLiquidAssets) * 100) : 0 }}%
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 6px;">
+                          <component :is="getTypeIconAndColor(acc.type).icon" :style="{ color: getTypeIconAndColor(acc.type).color }" size="16" weight="duotone" />
+                          <span class="sub-item-name" style="font-weight: 600; color: var(--color-text);">{{ acc.name }}</span>
+                        </div>
                       </div>
                       <div class="sub-item-right-val">
-                        <span class="sub-item-val">{{ isHidden ? '••••••' : formatCurrency(acc.balance).replace('$', '') }}</span>
+                        <span class="sub-item-val" style="font-family: var(--font-display); font-weight: 700; color: var(--color-text);">{{ isHidden ? '••••••' : formatCurrency(acc.balance).replace('$', '') }}</span>
                         <span v-if="acc.auto_record && acc.auto_record.enabled" class="sub-item-sync-icon" title="自動記帳啟用" style="margin-left: 6px; font-size: 0.8rem;">🔄</span>
                       </div>
                     </div>
@@ -2135,29 +2174,50 @@ onActivated(() => {
               <div class="group-body" v-if="listExpanded.invest">
                 <div v-if="groupedInvestments.length > 0" class="group-card-expanded-list" style="display: flex; flex-direction: column; gap: 14px;">
                   <div v-for="g in groupedInvestmentsByCustomGroup" :key="g.name" style="display: flex; flex-direction: column; gap: 8px;">
-                    <div v-if="g.name" style="font-size: 0.8rem; color: var(--color-text-muted); font-weight: bold; margin-left: 8px; margin-top: 6px; text-transform: uppercase; text-align: left;">
-                      {{ g.name }}
+                    <!-- Group Collapsible Header -->
+                    <div 
+                      @click.stop="toggleInvestGroup(g.name)" 
+                      style="display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; background: rgba(0, 0, 0, 0.02); border-radius: 12px; cursor: pointer; user-select: none; transition: background 0.2s;"
+                      onmouseover="this.style.background='rgba(0, 0, 0, 0.04)'"
+                      onmouseout="this.style.background='rgba(0, 0, 0, 0.02)'"
+                    >
+                      <div style="display: flex; align-items: center; gap: 8px;">
+                        <component :is="isInvestGroupExpanded(g.name) ? PhCaretUp : PhCaretDown" size="14" style="color: var(--color-text-muted);" />
+                        <span style="font-size: 0.9rem; color: var(--color-text); font-weight: bold;">
+                          {{ g.name }}
+                        </span>
+                        <span style="font-size: 0.72rem; background: rgba(92, 103, 245, 0.06); border: 1px solid rgba(92, 103, 245, 0.15); color: #5c67f5; padding: 2px 7px; border-radius: 99px; font-weight: 800; font-family: var(--font-display); letter-spacing: -0.01em;">
+                          {{ Math.round(g.percentage) }}%
+                        </span>
+                      </div>
+                      <span style="font-size: 0.85rem; color: var(--color-text-muted); font-weight: 700;">
+                        {{ isHidden ? '••••••' : formatCurrency(g.totalValueTwd).replace('$', '') }}
+                      </span>
                     </div>
-                    <div v-for="group in g.items" :key="group.symbol" class="sub-item-card" @click.stop="openInvestmentDetail(group.symbol)" style="cursor: pointer;">
-                      <!-- Circular Percentage Badge -->
-                      <div class="sub-item-badge">
-                        {{ Math.round(group.percentage) }}%
-                      </div>
-                      
-                      <!-- Stock/Crypto Details -->
-                      <div class="sub-item-info">
-                        <div class="sub-item-name">{{ group.name }}</div>
-                        <div class="sub-item-desc">
-                          持有 {{ group.qty }}, {{ group.currency }} {{ group.current_price }}
-                        </div>
-                      </div>
 
-                      <!-- Value & Date -->
-                      <div class="sub-item-right">
-                        <div class="sub-item-val">
-                          {{ isHidden ? '••••••' : formatCurrency(group.valueTwd).replace('$', '') }}
+                    <!-- Collapsible Items Section -->
+                    <div v-show="isInvestGroupExpanded(g.name)" style="display: flex; flex-direction: column; gap: 8px; padding-left: 8px; transition: all 0.3s ease;">
+                      <div v-for="group in g.items" :key="group.symbol" class="sub-item-card" @click.stop="openInvestmentDetail(group.symbol)" style="cursor: pointer;">
+                        <!-- Circular Percentage Badge (showing percentage of the group) -->
+                        <div class="sub-item-badge" style="background: rgba(92, 103, 245, 0.1); color: #5c67f5; font-weight: 800;">
+                          {{ Math.round(group.groupPercentage) }}%
                         </div>
-                        <div class="sub-item-date">{{ formatDate(group.price_updated_at) }}</div>
+                        
+                        <!-- Stock/Crypto Details -->
+                        <div class="sub-item-info">
+                          <div class="sub-item-name">{{ group.name }}</div>
+                          <div class="sub-item-desc">
+                            持有 {{ group.qty }}, {{ group.currency }} {{ group.current_price }}
+                          </div>
+                        </div>
+
+                        <!-- Value & Date -->
+                        <div class="sub-item-right">
+                          <div class="sub-item-val">
+                            {{ isHidden ? '••••••' : formatCurrency(group.valueTwd).replace('$', '') }}
+                          </div>
+                          <div class="sub-item-date">{{ formatDate(group.price_updated_at) }}</div>
+                        </div>
                       </div>
                     </div>
                   </div>
