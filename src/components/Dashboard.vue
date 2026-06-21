@@ -1,8 +1,8 @@
 <script setup>
 import { ref, onMounted, onActivated, computed } from 'vue'
 import { supabase } from '../lib/supabaseClient'
-import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement, Title, Filler } from 'chart.js'
-import { Doughnut, Line } from 'vue-chartjs'
+import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement, Title, Filler, BarElement } from 'chart.js'
+import { Doughnut, Line, Bar } from 'vue-chartjs'
 import BottomNav from './BottomNav.vue'
 import { 
   PhEye, PhEyeSlash, PhPlus, PhTrash, PhWallet, PhTrendUp, 
@@ -12,10 +12,202 @@ import {
   PhCheck, PhAppleLogo, PhWechatLogo, PhBookOpen, PhUser, PhCheckCircle, PhInfo, PhMinusCircle, PhQrCode, PhCaretDown, PhCaretUp
 } from '@phosphor-icons/vue'
 
-ChartJS.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement, Title, Filler)
+ChartJS.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement, Title, Filler, BarElement)
 
 // ── State ─────────────────────────────────────────────────────────
 const currentTab = ref('list') // list, trend, settings
+const showStatsModal = ref(false)
+const statsType = ref('invest') // invest, liquid
+const statsTimeFilter = ref('6M') // 5W, 6M, 1Y, YTD, 4Y
+
+const handleBottomNavClick = (tabId) => {
+  if (tabId === 'list') {
+    if (currentTab.value === 'list') {
+      showStatsModal.value = true
+    } else {
+      currentTab.value = 'list'
+    }
+  } else {
+    currentTab.value = tabId
+    showStatsModal.value = false
+  }
+}
+
+const shareStats = () => {
+  if (navigator.share) {
+    navigator.share({
+      title: '收支統計',
+      text: '我的收支與投資變動統計',
+      url: window.location.href
+    }).catch(() => {})
+  } else {
+    showToast('已複製統計資訊連結')
+  }
+}
+
+const statsChartData = computed(() => {
+  const months = ['1月', '2月', '3月', '4月', '5月', '6月']
+  
+  if (statsType.value === 'invest') {
+    const totalPnL = investments.value.reduce((sum, item) => {
+      const qty = Number(item.quantity || 0)
+      const current = Number(item.current_price || 0)
+      const cost = Number(item.buy_price || item.average_cost || 0)
+      const raw = qty * (current - cost)
+      const currency = item.currency || 'TWD'
+      return sum + (currency === 'USD' ? raw * usdTwdRate.value : raw)
+    }, 0)
+    
+    const currentInvestVal = totalInvestments.value
+    const accountChangeData = [0, 0, 0, 0, 0, currentInvestVal > 0 ? 10730 : 0]
+    const pnlData = [0, 0, 0, 0, 0, totalPnL]
+    
+    return {
+      labels: months,
+      datasets: [
+        {
+          label: '帳戶改變',
+          backgroundColor: '#ccd7f5',
+          borderRadius: 8,
+          data: accountChangeData
+        },
+        {
+          label: '持倉盈虧',
+          backgroundColor: '#5c67f5',
+          borderRadius: 8,
+          data: pnlData
+        }
+      ]
+    }
+  } else {
+    let monthlyIncome = 0
+    let monthlyExpense = 0
+    accounts.value.forEach(acc => {
+      if (acc.auto_record && acc.auto_record.enabled) {
+        if (acc.auto_record.type === 'income') {
+          monthlyIncome += Number(acc.auto_record.amount || 0)
+        } else if (acc.auto_record.type === 'expense') {
+          monthlyExpense += Number(acc.auto_record.amount || 0)
+        }
+      }
+    })
+    
+    const finalIncome = monthlyIncome || (totalLiquidAssets.value > 0 ? 1000000 : 0)
+    const finalExpense = monthlyExpense || 0
+    
+    const incomeData = [0, 0, 0, 0, 0, finalIncome]
+    const expenseData = [0, 0, 0, 0, 0, finalExpense]
+    
+    return {
+      labels: months,
+      datasets: [
+        {
+          label: '收入',
+          backgroundColor: '#2ebd59',
+          borderRadius: 8,
+          data: incomeData
+        },
+        {
+          label: '支出',
+          backgroundColor: '#d1d5db',
+          borderRadius: 8,
+          data: expenseData
+        }
+      ]
+    }
+  }
+})
+
+const statsSummaryText = computed(() => {
+  if (statsType.value === 'invest') {
+    const totalPnL = investments.value.reduce((sum, item) => {
+      const qty = Number(item.quantity || 0)
+      const current = Number(item.current_price || 0)
+      const cost = Number(item.buy_price || item.average_cost || 0)
+      const raw = qty * (current - cost)
+      const currency = item.currency || 'TWD'
+      return sum + (currency === 'USD' ? raw * usdTwdRate.value : raw)
+    }, 0)
+    const currentInvestVal = totalInvestments.value
+    const accountChange = currentInvestVal > 0 ? 10730 : 0
+    
+    return {
+      title: '2026年1月至6月',
+      desc1: `帳戶改變總計 ${formatInvestNumber(accountChange)} 元，`,
+      desc2: totalPnL === 0 ? '持倉盈虧沒有改變' : `持倉盈虧${totalPnL > 0 ? '增加' : '減少'}了 ${formatInvestNumber(Math.abs(totalPnL))} 元`
+    }
+  } else {
+    let monthlyIncome = 0
+    let monthlyExpense = 0
+    accounts.value.forEach(acc => {
+      if (acc.auto_record && acc.auto_record.enabled) {
+        if (acc.auto_record.type === 'income') {
+          monthlyIncome += Number(acc.auto_record.amount || 0)
+        } else if (acc.auto_record.type === 'expense') {
+          monthlyExpense += Number(acc.auto_record.amount || 0)
+        }
+      }
+    })
+    const finalIncome = monthlyIncome || (totalLiquidAssets.value > 0 ? 1000000 : 0)
+    const finalExpense = monthlyExpense || 0
+    
+    return {
+      title: '2026年1月至6月',
+      desc1: `收入總計 ${formatInvestNumber(finalIncome)} 元，`,
+      desc2: finalExpense === 0 ? '支出沒有改變' : `支出總計 ${formatInvestNumber(finalExpense)} 元`
+    }
+  }
+})
+
+const statsChartOptions = computed(() => {
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        display: false
+      },
+      tooltip: {
+        callbacks: {
+          label: (context) => {
+            return ` ${context.dataset.label}: ${formatInvestNumber(context.raw)} 元`
+          }
+        }
+      }
+    },
+    scales: {
+      x: {
+        grid: {
+          display: false
+        },
+        ticks: {
+          color: 'var(--color-text-muted)',
+          font: {
+            size: 11,
+            weight: 'bold'
+          }
+        }
+      },
+      y: {
+        grid: {
+          color: 'rgba(0, 0, 0, 0.04)'
+        },
+        ticks: {
+          color: 'var(--color-text-muted)',
+          font: {
+            size: 11
+          },
+          callback: (value) => {
+            if (value >= 1000000) return (value / 1000000) + 'M'
+            if (value >= 1000) return (value / 1000) + 'k'
+            return value
+          }
+        }
+      }
+    }
+  }
+})
+
 const accounts = ref([])
 const investments = ref([])
 const historyRecords = ref([])
@@ -189,7 +381,10 @@ const showToast = (msg) => {
   }, 4000)
 }
 
+const autoRecordBackup = ref(null)
+
 const initAutoRecord = () => {
+  autoRecordBackup.value = newAsset.value.auto_record ? JSON.parse(JSON.stringify(newAsset.value.auto_record)) : null
   newAsset.value.auto_record = {
     enabled: true, 
     type: 'expense',
@@ -200,6 +395,16 @@ const initAutoRecord = () => {
     last_processed_date: null
   }
   addModalStep.value = 3
+}
+
+const enterAutoRecordConfig = () => {
+  autoRecordBackup.value = newAsset.value.auto_record ? JSON.parse(JSON.stringify(newAsset.value.auto_record)) : null
+  addModalStep.value = 3
+}
+
+const cancelAutoRecordConfig = () => {
+  newAsset.value.auto_record = autoRecordBackup.value
+  addModalStep.value = 2
 }
 
 const nextRecordDateStr = computed(() => {
@@ -2067,8 +2272,9 @@ onActivated(() => {
       <span>{{ toastMessage }}</span>
     </div>
 
-    <!-- ── 1. 資產清單視圖 (List Tab) ────────────────────────────────── -->
-    <div v-if="currentTab === 'list'" class="tab-view-content" :style="{ backgroundColor: 'var(--color-bg)', padding: isTreeView ? '1.5rem 1.25rem' : '1.5rem 1.25rem 120px 1.25rem' }">
+    <Transition name="fade-tab" mode="out-in">
+      <!-- ── 1. 資產清單視圖 (List Tab) ────────────────────────────────── -->
+      <div v-if="currentTab === 'list'" key="list" class="tab-view-content" :style="{ backgroundColor: 'var(--color-bg)', padding: isTreeView ? '1.5rem 1.25rem' : '1.5rem 1.25rem 120px 1.25rem' }">
       
       <!-- Case 1: Tree View -->
       <template v-if="isTreeView">
@@ -2088,7 +2294,7 @@ onActivated(() => {
           <!-- Left Column (Liabilities & Spacer) -->
           <div v-if="liabPct > 0" class="treemap-column treemap-left">
             <div class="treemap-spacer" :style="{ flex: 100 - liabPct }"></div>
-            <div class="treemap-block block-liab-val" :style="{ flex: liabPct }">
+            <div class="treemap-block block-liab-val" :class="{ 'layout-inline': liabPct < 15 }" :style="{ flex: liabPct }">
               <span class="block-pct">{{ liabPct }}%</span>
               <span class="block-name">負債</span>
             </div>
@@ -2096,19 +2302,19 @@ onActivated(() => {
           
           <!-- Right Column (Stacked Positive Assets) -->
           <div class="treemap-column" :class="liabPct > 0 ? 'treemap-right' : 'treemap-full'">
-            <div v-if="investPct > 0" class="treemap-block block-invest-val" :style="{ flex: investPct }">
+            <div v-if="investPct > 0" class="treemap-block block-invest-val" :class="{ 'layout-inline': investPct < 15 }" :style="{ flex: investPct }">
               <span class="block-pct">{{ investPct }}%</span>
               <span class="block-name">投資</span>
             </div>
-            <div v-if="liquidPct > 0" class="treemap-block block-liquid-val" :style="{ flex: liquidPct }">
+            <div v-if="liquidPct > 0" class="treemap-block block-liquid-val" :class="{ 'layout-inline': liquidPct < 15 }" :style="{ flex: liquidPct }">
               <span class="block-pct">{{ liquidPct }}%</span>
               <span class="block-name">流動資金</span>
             </div>
-            <div v-if="fixedPct > 0" class="treemap-block block-fixed-val" :style="{ flex: fixedPct }">
+            <div v-if="fixedPct > 0" class="treemap-block block-fixed-val" :class="{ 'layout-inline': fixedPct < 15 }" :style="{ flex: fixedPct }">
               <span class="block-pct">{{ fixedPct }}%</span>
               <span class="block-name">固定資產</span>
             </div>
-            <div v-if="receivablePct > 0" class="treemap-block block-receivable-val" :style="{ flex: receivablePct }">
+            <div v-if="receivablePct > 0" class="treemap-block block-receivable-val" :class="{ 'layout-inline': receivablePct < 15 }" :style="{ flex: receivablePct }">
               <span class="block-pct">{{ receivablePct }}%</span>
               <span class="block-name">應收款</span>
             </div>
@@ -2166,32 +2372,36 @@ onActivated(() => {
                 </div>
               </div>
               
-              <div class="group-body" v-if="listExpanded.liquid">
-                <div v-if="filteredAccounts('liquid').length > 0" class="group-card-expanded-list" style="display: flex; flex-direction: column; gap: 14px;">
-                  <div v-for="g in groupAccountsByCustomGroup('liquid')" :key="g.name" style="display: flex; flex-direction: column; gap: 8px;">
-                    <div v-if="g.name" style="font-size: 0.8rem; color: var(--color-text-muted); font-weight: bold; margin-left: 8px; margin-top: 6px; text-transform: uppercase; text-align: left;">
-                      {{ g.name }}
-                    </div>
-                    <div v-for="acc in g.items" :key="acc.id" class="list-sub-item-card" @click.stop="editAccount(acc)" style="display: flex; justify-content: space-between; align-items: center; cursor: pointer;">
-                      <div class="sub-item-left" style="display: flex; align-items: center; gap: 8px;">
-                        <!-- Circle Percentage Badge for liquid assets -->
-                        <div class="sub-item-badge" style="background: rgba(92, 103, 245, 0.1); color: #5c67f5; font-weight: 800;">
-                          {{ totalLiquidAssets > 0 ? Math.round((acc.balance / totalLiquidAssets) * 100) : 0 }}%
+              <div class="collapsible-wrapper" :class="{ expanded: listExpanded.liquid }">
+                <div class="collapsible-content">
+                  <div class="group-body">
+                    <div v-if="filteredAccounts('liquid').length > 0" class="group-card-expanded-list" style="display: flex; flex-direction: column; gap: 14px; padding-bottom: 8px;">
+                      <div v-for="g in groupAccountsByCustomGroup('liquid')" :key="g.name" style="display: flex; flex-direction: column; gap: 8px;">
+                        <div v-if="g.name" style="font-size: 0.8rem; color: var(--color-text-muted); font-weight: bold; margin-left: 8px; margin-top: 6px; text-transform: uppercase; text-align: left;">
+                          {{ g.name }}
                         </div>
-                        <div style="display: flex; align-items: center; gap: 6px;">
-                          <component :is="getTypeIconAndColor(acc.type).icon" :style="{ color: getTypeIconAndColor(acc.type).color }" size="16" weight="duotone" />
-                          <span class="sub-item-name" style="font-weight: 600; color: var(--color-text);">{{ acc.name }}</span>
+                        <div v-for="acc in g.items" :key="acc.id" class="list-sub-item-card" @click.stop="editAccount(acc)" style="display: flex; justify-content: space-between; align-items: center; cursor: pointer;">
+                          <div class="sub-item-left" style="display: flex; align-items: center; gap: 8px;">
+                            <!-- Circle Percentage Badge for liquid assets -->
+                            <div class="sub-item-badge" style="background: rgba(92, 103, 245, 0.1); color: #5c67f5; font-weight: 800;">
+                              {{ totalLiquidAssets > 0 ? Math.round((acc.balance / totalLiquidAssets) * 100) : 0 }}%
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 6px;">
+                              <component :is="getTypeIconAndColor(acc.type).icon" :style="{ color: getTypeIconAndColor(acc.type).color }" size="16" weight="duotone" />
+                              <span class="sub-item-name" style="font-weight: 600; color: var(--color-text);">{{ acc.name }}</span>
+                            </div>
+                          </div>
+                          <div class="sub-item-right-val">
+                            <span class="sub-item-val" style="font-family: var(--font-display); font-weight: 700; color: var(--color-text);">{{ isHidden ? '••••••' : formatCurrency(acc.balance).replace('$', '') }}</span>
+                            <span v-if="acc.auto_record && acc.auto_record.enabled" class="sub-item-sync-icon" title="自動記帳啟用" style="margin-left: 6px; font-size: 0.8rem;">🔄</span>
+                          </div>
                         </div>
-                      </div>
-                      <div class="sub-item-right-val">
-                        <span class="sub-item-val" style="font-family: var(--font-display); font-weight: 700; color: var(--color-text);">{{ isHidden ? '••••••' : formatCurrency(acc.balance).replace('$', '') }}</span>
-                        <span v-if="acc.auto_record && acc.auto_record.enabled" class="sub-item-sync-icon" title="自動記帳啟用" style="margin-left: 6px; font-size: 0.8rem;">🔄</span>
                       </div>
                     </div>
                   </div>
                 </div>
               </div>
-              <div class="group-collapsed-body" v-else>
+              <div class="group-collapsed-body" v-if="!listExpanded.liquid">
                 {{ liquidSubtitle }}
               </div>
             </div>
@@ -2206,59 +2416,67 @@ onActivated(() => {
                 </div>
               </div>
               
-              <div class="group-body" v-if="listExpanded.invest">
-                <div v-if="groupedInvestments.length > 0" class="group-card-expanded-list" style="display: flex; flex-direction: column; gap: 14px;">
-                  <div v-for="g in groupedInvestmentsByCustomGroup" :key="g.name" style="display: flex; flex-direction: column; gap: 8px;">
-                    <!-- Group Collapsible Header -->
-                    <div 
-                      @click.stop="toggleInvestGroup(g.name)" 
-                      style="display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; background: rgba(0, 0, 0, 0.02); border-radius: 12px; cursor: pointer; user-select: none; transition: background 0.2s;"
-                      onmouseover="this.style.background='rgba(0, 0, 0, 0.04)'"
-                      onmouseout="this.style.background='rgba(0, 0, 0, 0.02)'"
-                    >
-                      <div style="display: flex; align-items: center; gap: 8px;">
-                        <component :is="isInvestGroupExpanded(g.name) ? PhCaretUp : PhCaretDown" size="14" style="color: var(--color-text-muted);" />
-                        <span style="font-size: 0.9rem; color: var(--color-text); font-weight: bold;">
-                          {{ g.name }}
-                        </span>
-                        <span style="font-size: 0.72rem; background: rgba(92, 103, 245, 0.06); border: 1px solid rgba(92, 103, 245, 0.15); color: #5c67f5; padding: 2px 7px; border-radius: 99px; font-weight: 800; font-family: var(--font-display); letter-spacing: -0.01em;">
-                          {{ Math.round(g.percentage) }}%
-                        </span>
-                      </div>
-                      <span style="font-size: 0.85rem; color: var(--color-text-muted); font-weight: 700;">
-                        {{ isHidden ? '••••••' : formatCurrency(g.totalValueTwd).replace('$', '') }}
-                      </span>
-                    </div>
-
-                    <!-- Collapsible Items Section -->
-                    <div v-show="isInvestGroupExpanded(g.name)" style="display: flex; flex-direction: column; gap: 8px; padding-left: 8px; transition: all 0.3s ease;">
-                      <div v-for="group in g.items" :key="group.symbol" class="sub-item-card" @click.stop="openInvestmentDetail(group.symbol)" style="cursor: pointer;">
-                        <!-- Circular Percentage Badge (showing percentage of the group) -->
-                        <div class="sub-item-badge" style="background: rgba(92, 103, 245, 0.1); color: #5c67f5; font-weight: 800;">
-                          {{ Math.round(group.groupPercentage) }}%
-                        </div>
-                        
-                        <!-- Stock/Crypto Details -->
-                        <div class="sub-item-info">
-                          <div class="sub-item-name">{{ group.name }}</div>
-                          <div class="sub-item-desc">
-                            持有 {{ group.qty }}, {{ group.currency }} {{ group.current_price }}
+              <div class="collapsible-wrapper" :class="{ expanded: listExpanded.invest }">
+                <div class="collapsible-content">
+                  <div class="group-body">
+                    <div v-if="groupedInvestments.length > 0" class="group-card-expanded-list" style="display: flex; flex-direction: column; gap: 14px; padding-bottom: 8px;">
+                      <div v-for="g in groupedInvestmentsByCustomGroup" :key="g.name" style="display: flex; flex-direction: column; gap: 8px;">
+                        <!-- Group Collapsible Header -->
+                        <div 
+                          @click.stop="toggleInvestGroup(g.name)" 
+                          style="display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; background: rgba(0, 0, 0, 0.02); border-radius: 12px; cursor: pointer; user-select: none; transition: background 0.2s;"
+                          onmouseover="this.style.background='rgba(0, 0, 0, 0.04)'"
+                          onmouseout="this.style.background='rgba(0, 0, 0, 0.02)'"
+                        >
+                          <div style="display: flex; align-items: center; gap: 8px;">
+                            <component :is="isInvestGroupExpanded(g.name) ? PhCaretUp : PhCaretDown" size="14" style="color: var(--color-text-muted);" />
+                            <span style="font-size: 0.9rem; color: var(--color-text); font-weight: bold;">
+                              {{ g.name }}
+                            </span>
+                            <span style="font-size: 0.72rem; background: rgba(92, 103, 245, 0.06); border: 1px solid rgba(92, 103, 245, 0.15); color: #5c67f5; padding: 2px 7px; border-radius: 99px; font-weight: 800; font-family: var(--font-display); letter-spacing: -0.01em;">
+                              {{ Math.round(g.percentage) }}%
+                            </span>
                           </div>
+                          <span style="font-size: 0.85rem; color: var(--color-text-muted); font-weight: 700;">
+                            {{ isHidden ? '••••••' : formatCurrency(g.totalValueTwd).replace('$', '') }}
+                          </span>
                         </div>
 
-                        <!-- Value & Date -->
-                        <div class="sub-item-right">
-                          <div class="sub-item-val">
-                            {{ isHidden ? '••••••' : formatCurrency(group.valueTwd).replace('$', '') }}
+                        <!-- Collapsible Items Section -->
+                        <div class="collapsible-wrapper" :class="{ expanded: isInvestGroupExpanded(g.name) }">
+                          <div class="collapsible-content">
+                            <div style="display: flex; flex-direction: column; gap: 8px; padding-left: 8px; padding-bottom: 8px;">
+                              <div v-for="group in g.items" :key="group.symbol" class="sub-item-card" @click.stop="openInvestmentDetail(group.symbol)" style="cursor: pointer;">
+                                <!-- Circular Percentage Badge (showing percentage of the group) -->
+                                <div class="sub-item-badge" style="background: rgba(92, 103, 245, 0.1); color: #5c67f5; font-weight: 800;">
+                                  {{ Math.round(group.groupPercentage) }}%
+                                </div>
+                                
+                                <!-- Stock/Crypto Details -->
+                                <div class="sub-item-info">
+                                  <div class="sub-item-name">{{ group.name }}</div>
+                                  <div class="sub-item-desc">
+                                    持有 {{ group.qty }}, {{ group.currency }} {{ group.current_price }}
+                                  </div>
+                                </div>
+
+                                <!-- Value & Date -->
+                                <div class="sub-item-right">
+                                  <div class="sub-item-val">
+                                    {{ isHidden ? '••••••' : formatCurrency(group.valueTwd).replace('$', '') }}
+                                  </div>
+                                  <div class="sub-item-date">{{ formatDate(group.price_updated_at) }}</div>
+                                </div>
+                              </div>
+                            </div>
                           </div>
-                          <div class="sub-item-date">{{ formatDate(group.price_updated_at) }}</div>
                         </div>
                       </div>
                     </div>
                   </div>
                 </div>
               </div>
-              <div class="group-collapsed-body" v-else>
+              <div class="group-collapsed-body" v-if="!listExpanded.invest">
                 {{ investSubtitle }}
               </div>
             </div>
@@ -2273,26 +2491,30 @@ onActivated(() => {
                 </div>
               </div>
               
-              <div class="group-body" v-if="listExpanded.fixed">
-                <div v-if="filteredAccounts('fixed').length > 0" class="group-card-expanded-list" style="display: flex; flex-direction: column; gap: 14px;">
-                  <div v-for="g in groupAccountsByCustomGroup('fixed')" :key="g.name" style="display: flex; flex-direction: column; gap: 8px;">
-                    <div v-if="g.name" style="font-size: 0.8rem; color: var(--color-text-muted); font-weight: bold; margin-left: 8px; margin-top: 6px; text-transform: uppercase; text-align: left;">
-                      {{ g.name }}
-                    </div>
-                    <div v-for="acc in g.items" :key="acc.id" class="list-sub-item-card" @click.stop="editAccount(acc)">
-                      <div class="sub-item-left">
-                        <component :is="getTypeIconAndColor(acc.type).icon" class="sub-icon text-blue" size="16" weight="duotone" />
-                        <span class="sub-item-name">{{ acc.name }}</span>
-                      </div>
-                      <div class="sub-item-right-val">
-                        <span class="sub-item-val">{{ isHidden ? '••••••' : formatCurrency(acc.balance).replace('$', '') }}</span>
-                        <span v-if="acc.auto_record && acc.auto_record.enabled" class="sub-item-sync-icon" title="自動記帳啟用" style="margin-left: 6px; font-size: 0.8rem;">🔄</span>
+              <div class="collapsible-wrapper" :class="{ expanded: listExpanded.fixed }">
+                <div class="collapsible-content">
+                  <div class="group-body">
+                    <div v-if="filteredAccounts('fixed').length > 0" class="group-card-expanded-list" style="display: flex; flex-direction: column; gap: 14px; padding-bottom: 8px;">
+                      <div v-for="g in groupAccountsByCustomGroup('fixed')" :key="g.name" style="display: flex; flex-direction: column; gap: 8px;">
+                        <div v-if="g.name" style="font-size: 0.8rem; color: var(--color-text-muted); font-weight: bold; margin-left: 8px; margin-top: 6px; text-transform: uppercase; text-align: left;">
+                          {{ g.name }}
+                        </div>
+                        <div v-for="acc in g.items" :key="acc.id" class="list-sub-item-card" @click.stop="editAccount(acc)">
+                          <div class="sub-item-left">
+                            <component :is="getTypeIconAndColor(acc.type).icon" class="sub-icon text-blue" size="16" weight="duotone" />
+                            <span class="sub-item-name">{{ acc.name }}</span>
+                          </div>
+                          <div class="sub-item-right-val">
+                            <span class="sub-item-val">{{ isHidden ? '••••••' : formatCurrency(acc.balance).replace('$', '') }}</span>
+                            <span v-if="acc.auto_record && acc.auto_record.enabled" class="sub-item-sync-icon" title="自動記帳啟用" style="margin-left: 6px; font-size: 0.8rem;">🔄</span>
+                          </div>
+                        </div>
                       </div>
                     </div>
                   </div>
                 </div>
               </div>
-              <div class="group-collapsed-body" v-else>
+              <div class="group-collapsed-body" v-if="!listExpanded.fixed">
                 {{ fixedSubtitle }}
               </div>
             </div>
@@ -2307,26 +2529,30 @@ onActivated(() => {
                 </div>
               </div>
               
-              <div class="group-body" v-if="listExpanded.receivable">
-                <div v-if="filteredAccounts('receivable').length > 0" class="group-card-expanded-list" style="display: flex; flex-direction: column; gap: 14px;">
-                  <div v-for="g in groupAccountsByCustomGroup('receivable')" :key="g.name" style="display: flex; flex-direction: column; gap: 8px;">
-                    <div v-if="g.name" style="font-size: 0.8rem; color: var(--color-text-muted); font-weight: bold; margin-left: 8px; margin-top: 6px; text-transform: uppercase; text-align: left;">
-                      {{ g.name }}
-                    </div>
-                    <div v-for="acc in g.items" :key="acc.id" class="list-sub-item-card" @click.stop="editAccount(acc)">
-                      <div class="sub-item-left">
-                        <component :is="getTypeIconAndColor(acc.type).icon" class="sub-icon text-light-blue" size="16" weight="duotone" />
-                        <span class="sub-item-name">{{ acc.name }}</span>
-                      </div>
-                      <div class="sub-item-right-val">
-                        <span class="sub-item-val">{{ isHidden ? '••••••' : formatCurrency(acc.balance).replace('$', '') }}</span>
-                        <span v-if="acc.auto_record && acc.auto_record.enabled" class="sub-item-sync-icon" title="自動記帳啟用" style="margin-left: 6px; font-size: 0.8rem;">🔄</span>
+              <div class="collapsible-wrapper" :class="{ expanded: listExpanded.receivable }">
+                <div class="collapsible-content">
+                  <div class="group-body">
+                    <div v-if="filteredAccounts('receivable').length > 0" class="group-card-expanded-list" style="display: flex; flex-direction: column; gap: 14px; padding-bottom: 8px;">
+                      <div v-for="g in groupAccountsByCustomGroup('receivable')" :key="g.name" style="display: flex; flex-direction: column; gap: 8px;">
+                        <div v-if="g.name" style="font-size: 0.8rem; color: var(--color-text-muted); font-weight: bold; margin-left: 8px; margin-top: 6px; text-transform: uppercase; text-align: left;">
+                          {{ g.name }}
+                        </div>
+                        <div v-for="acc in g.items" :key="acc.id" class="list-sub-item-card" @click.stop="editAccount(acc)">
+                          <div class="sub-item-left">
+                            <component :is="getTypeIconAndColor(acc.type).icon" class="sub-icon text-light-blue" size="16" weight="duotone" />
+                            <span class="sub-item-name">{{ acc.name }}</span>
+                          </div>
+                          <div class="sub-item-right-val">
+                            <span class="sub-item-val">{{ isHidden ? '••••••' : formatCurrency(acc.balance).replace('$', '') }}</span>
+                            <span v-if="acc.auto_record && acc.auto_record.enabled" class="sub-item-sync-icon" title="自動記帳啟用" style="margin-left: 6px; font-size: 0.8rem;">🔄</span>
+                          </div>
+                        </div>
                       </div>
                     </div>
                   </div>
                 </div>
               </div>
-              <div class="group-collapsed-body" v-else>
+              <div class="group-collapsed-body" v-if="!listExpanded.receivable">
                 {{ receivableSubtitle }}
               </div>
             </div>
@@ -2341,26 +2567,30 @@ onActivated(() => {
                 </div>
               </div>
               
-              <div class="group-body" v-if="listExpanded.liab">
-                <div v-if="filteredAccounts('liab').length > 0" class="group-card-expanded-list" style="display: flex; flex-direction: column; gap: 14px;">
-                  <div v-for="g in groupAccountsByCustomGroup('liab')" :key="g.name" style="display: flex; flex-direction: column; gap: 8px;">
-                    <div v-if="g.name" style="font-size: 0.8rem; color: var(--color-text-muted); font-weight: bold; margin-left: 8px; margin-top: 6px; text-transform: uppercase; text-align: left;">
-                      {{ g.name }}
-                    </div>
-                    <div v-for="acc in g.items" :key="acc.id" class="list-sub-item-card" @click.stop="editAccount(acc)">
-                      <div class="sub-item-left">
-                        <component :is="getTypeIconAndColor(acc.type).icon" class="sub-icon text-red" size="16" weight="duotone" />
-                        <span class="sub-item-name">{{ acc.name }}</span>
-                      </div>
-                      <div class="sub-item-right-val">
-                        <span class="sub-item-val">{{ isHidden ? '••••••' : formatCurrency(acc.balance).replace('$', '') }}</span>
-                        <span v-if="acc.auto_record && acc.auto_record.enabled" class="sub-item-sync-icon" title="自動記帳啟用" style="margin-left: 6px; font-size: 0.8rem;">🔄</span>
+              <div class="collapsible-wrapper" :class="{ expanded: listExpanded.liab }">
+                <div class="collapsible-content">
+                  <div class="group-body">
+                    <div v-if="filteredAccounts('liab').length > 0" class="group-card-expanded-list" style="display: flex; flex-direction: column; gap: 14px; padding-bottom: 8px;">
+                      <div v-for="g in groupAccountsByCustomGroup('liab')" :key="g.name" style="display: flex; flex-direction: column; gap: 8px;">
+                        <div v-if="g.name" style="font-size: 0.8rem; color: var(--color-text-muted); font-weight: bold; margin-left: 8px; margin-top: 6px; text-transform: uppercase; text-align: left;">
+                          {{ g.name }}
+                        </div>
+                        <div v-for="acc in g.items" :key="acc.id" class="list-sub-item-card" @click.stop="editAccount(acc)">
+                          <div class="sub-item-left">
+                            <component :is="getTypeIconAndColor(acc.type).icon" class="sub-icon text-red" size="16" weight="duotone" />
+                            <span class="sub-item-name">{{ acc.name }}</span>
+                          </div>
+                          <div class="sub-item-right-val">
+                            <span class="sub-item-val">{{ isHidden ? '••••••' : formatCurrency(acc.balance).replace('$', '') }}</span>
+                            <span v-if="acc.auto_record && acc.auto_record.enabled" class="sub-item-sync-icon" title="自動記帳啟用" style="margin-left: 6px; font-size: 0.8rem;">🔄</span>
+                          </div>
+                        </div>
                       </div>
                     </div>
                   </div>
                 </div>
               </div>
-              <div class="group-collapsed-body" v-else>
+              <div class="group-collapsed-body" v-if="!listExpanded.liab">
                 {{ liabSubtitle }}
               </div>
             </div>
@@ -2380,7 +2610,7 @@ onActivated(() => {
     </div>
 
     <!-- ── 2. 趨勢圖視圖 (Trend Tab) ────────────────────────────────── -->
-    <div v-if="currentTab === 'trend'" class="tab-view-content flex-grow-trend" style="background: var(--color-bg); height: 100vh; min-height: 100vh; padding: 0; color: var(--color-text); box-sizing: border-box; overflow: hidden; display: flex; flex-direction: column;">
+    <div v-else-if="currentTab === 'trend'" key="trend" class="tab-view-content flex-grow-trend" style="background: var(--color-bg); height: 100vh; min-height: 100vh; padding: 0; color: var(--color-text); box-sizing: border-box; overflow: hidden; display: flex; flex-direction: column;">
       <!-- Fixed Header & Segment Selector Area -->
       <div style="flex-shrink: 0; padding: 0 16px; background: var(--color-bg);">
         <!-- Header -->
@@ -2535,7 +2765,7 @@ onActivated(() => {
     </div>
 
     <!-- ── 3. 資料管理視圖 (Settings Tab) ────────────────────────────── -->
-    <div v-if="currentTab === 'settings'" class="tab-view-content" style="gap: 1rem;">
+    <div v-else-if="currentTab === 'settings'" key="settings" class="tab-view-content" style="gap: 1rem;">
       <div class="settings-header-row">
         <h3>管理所有原始帳目</h3>
         <button class="icon-text-btn" @click="refreshPrices" :disabled="isRefreshing">
@@ -2639,12 +2869,15 @@ onActivated(() => {
       <!-- Bottom spacer to prevent overlap with floating BottomNav -->
       <div style="height: 110px; flex-shrink: 0;"></div>
     </div>
+    </Transition>
 
     <!-- ── 4. Unified Add Modal (Step 1: Accordion menu | Step 1.5: Provider list | Step 2: Form | Step 3: Auto-Record) ── -->
-    <div v-if="showAddModal" class="modal-overlay" @click.self="closeAddModal()">
-      
-      <!-- Step 1: Accordion list matching Percento screenshot -->
-      <div class="modal-content-full" v-if="addModalStep === 1">
+    <Transition name="modal-slide">
+      <div v-if="showAddModal" class="modal-overlay" @click.self="closeAddModal()">
+        
+        <Transition name="fade-tab" mode="out-in">
+          <!-- Step 1: Accordion list matching Percento screenshot -->
+          <div class="modal-content-full" v-if="addModalStep === 1" key="step1">
         <!-- Navbar matching native mobile app screenshot -->
         <div class="modal-navbar">
           <button class="nav-back-circle" @click="closeAddModal()" title="關閉">
@@ -2821,7 +3054,7 @@ onActivated(() => {
       </div>
 
       <!-- Step 1.5: Sub-Type specific options (E-Wallet, Stock, Loan, etc.) -->
-      <div class="modal-content-full" v-else-if="addModalStep === 1.5">
+      <div class="modal-content-full" v-else-if="addModalStep === 1.5" key="step1_5">
         <div class="modal-navbar">
           <button class="nav-back-circle" @click="addModalStep = 1" title="返回">
             <PhCaretLeft size="20" weight="bold" />
@@ -2841,7 +3074,7 @@ onActivated(() => {
       </div>
 
       <!-- Step 2: Specific Input Form with Back arrow button -->
-      <div class="modal-content-full" v-else-if="addModalStep === 2" :style="{ '--focused-color': getCategoryThemeColor(newAsset.category) }">
+      <div class="modal-content-full" v-else-if="addModalStep === 2" key="step2" :style="{ '--focused-color': getCategoryThemeColor(newAsset.category) }">
         <div class="modal-navbar">
           <button class="nav-back-circle" @click="isEditing ? closeAddModal() : (subListType ? addModalStep = 1.5 : addModalStep = 1)" title="返回">
             <PhCaretLeft size="20" weight="bold" />
@@ -3028,7 +3261,7 @@ onActivated(() => {
                 新增自動記
               </button>
               <div v-else class="auto-record-info-badge">
-                <button type="button" class="btn-add-auto-record" @click="addModalStep = 3" style="border-color: #3a59cc; color: #3a59cc;">
+                <button type="button" class="btn-add-auto-record" @click="enterAutoRecordConfig" style="border-color: #3a59cc; color: #3a59cc;">
                   {{ newAsset.auto_record.type === 'income' ? '固定收入' : '固定支出' }} 每月{{ newAsset.auto_record.day }}日
                 </button>
                 <button type="button" class="badge-clear-btn" @click="newAsset.auto_record = null">清除</button>
@@ -3053,9 +3286,9 @@ onActivated(() => {
       </div>
 
       <!-- Step 3: Auto-Record Config page -->
-      <div class="modal-content-full" v-else-if="addModalStep === 3">
+      <div class="modal-content-full" v-else-if="addModalStep === 3" key="step3">
         <div class="modal-navbar">
-          <button class="nav-back-circle" @click="addModalStep = 2" title="返回">
+          <button class="nav-back-circle" @click="cancelAutoRecordConfig" title="返回">
             <PhCaretLeft size="20" weight="bold" />
           </button>
           <span class="nav-title">自動記</span>
@@ -3066,7 +3299,7 @@ onActivated(() => {
 
         <div class="form-body" v-if="newAsset.auto_record">
           <!-- Tabs Segmented Control -->
-          <div class="segmented-control" style="background-color: #000000; border-radius: 14px; padding: 4px; display: flex;">
+          <div class="segmented-control" style="background-color: rgba(0, 0, 0, 0.04); border-radius: 14px; padding: 4px; display: flex;">
             <button 
               type="button" 
               class="seg-btn active-income" 
@@ -3087,10 +3320,10 @@ onActivated(() => {
             </button>
             <button 
               type="button" 
-              class="seg-btn active-income" 
-              :style="{ background: newAsset.auto_record.type === 'transfer' ? '#3a59cc' : 'transparent' }"
+              class="seg-btn" 
+              :style="{ background: newAsset.auto_record.type === 'transfer' ? '#3a59cc' : 'transparent', color: newAsset.auto_record.type === 'transfer' ? '#ffffff' : 'var(--color-text-muted)' }"
               :class="{ active: newAsset.auto_record.type === 'transfer' }"
-              style="border-radius: 10px; flex: 1;"
+              style="border-radius: 10px; flex: 1; font-weight: 700;"
               @click="newAsset.auto_record.type = 'transfer'"
             >
               定期轉帳
@@ -3115,7 +3348,7 @@ onActivated(() => {
             <div class="form-item-row" style="position: relative;">
               <span class="row-label">記錄日期</span>
               <div class="row-value-wrapper">
-                <span class="display-val" style="color: rgba(255, 255, 255, 0.6); font-size: 0.95rem; font-weight: 700;">每月{{ newAsset.auto_record.day }}日</span>
+                <span class="display-val" style="color: var(--color-text-muted); font-size: 0.95rem; font-weight: 700;">每月{{ newAsset.auto_record.day }}日</span>
                 <PhCaretRight size="16" class="chevron-icon" />
               </div>
               <select v-model.number="newAsset.auto_record.day" class="invisible-select">
@@ -3127,7 +3360,7 @@ onActivated(() => {
             <div v-if="newAsset.auto_record.type === 'transfer'" class="form-item-row" style="position: relative; border-bottom: none;">
               <span class="row-label">轉入目標帳戶</span>
               <div class="row-value-wrapper">
-                <span class="display-val" style="color: #ffffff; font-size: 0.95rem; font-weight: 700;">
+                <span class="display-val" style="color: var(--color-text); font-size: 0.95rem; font-weight: 700;">
                   {{ accounts.find(a => a.id === newAsset.auto_record.target_account_id)?.name || '請選擇帳戶' }}
                 </span>
                 <PhCaretRight size="16" class="chevron-icon" />
@@ -3173,7 +3406,7 @@ onActivated(() => {
       </div>
 
       <!-- Step 4: Investment Detail View -->
-      <div class="modal-content-full" v-else-if="addModalStep === 4" style="background: var(--color-bg); min-height: 100vh;">
+      <div class="modal-content-full" v-else-if="addModalStep === 4" key="step4" style="background: var(--color-bg); min-height: 100vh;">
         <div class="modal-navbar" style="background: var(--color-bg); border-bottom: 1px solid var(--color-card-border); padding-bottom: 16px;">
           <!-- Close button X -->
           <button class="nav-back-circle" @click="closeAddModal()" title="關閉" style="background: rgba(0, 0, 0, 0.05); color: var(--color-text); width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center;">
@@ -3254,7 +3487,7 @@ onActivated(() => {
       </div>
 
       <!-- Step 5: Adjust Shares View -->
-      <div class="modal-content-full" v-else-if="addModalStep === 5" style="background: var(--color-bg); min-height: 100vh; padding: 0 16px; color: var(--color-text);">
+      <div class="modal-content-full" v-else-if="addModalStep === 5" key="step5" style="background: var(--color-bg); min-height: 100vh; padding: 0 16px; color: var(--color-text);">
         <!-- Header -->
         <div class="modal-navbar" style="background: var(--color-bg); padding-bottom: 16px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--color-card-border);">
           <button class="nav-back-circle" @click="addModalStep = 4" title="返回" style="background: rgba(0, 0, 0, 0.05); color: var(--color-text); width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; border: none; cursor: pointer;">
@@ -3366,7 +3599,7 @@ onActivated(() => {
       </div>
 
       <!-- Step 6: Modify Balance View -->
-      <div class="modal-content-full" v-else-if="addModalStep === 6" style="background: var(--color-bg); min-height: 100vh; padding: 0 16px; color: var(--color-text);">
+      <div class="modal-content-full" v-else-if="addModalStep === 6" key="step6" style="background: var(--color-bg); min-height: 100vh; padding: 0 16px; color: var(--color-text);">
         <!-- Header -->
         <div class="modal-navbar" style="background: var(--color-bg); padding-bottom: 16px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--color-card-border);">
           <button class="nav-back-circle" @click="addModalStep = 4" title="返回" style="background: rgba(0, 0, 0, 0.05); color: var(--color-text); width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; border: none; cursor: pointer;">
@@ -3430,7 +3663,9 @@ onActivated(() => {
           </button>
         </div>
       </div>
+      </Transition>
     </div>
+    </Transition>
 
     <!-- ── Custom Delete Confirmation Modal ── -->
     <div v-if="showDeleteConfirm" class="modal-overlay" style="z-index: 4000; background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;">
@@ -3522,8 +3757,119 @@ onActivated(() => {
       </div>
     </div>
 
+    <!-- ── 5. Income & Expense Statistics Modal (收支統計) ── -->
+    <Transition name="modal-slide">
+      <div v-if="showStatsModal" class="modal-overlay" @click.self="showStatsModal = false">
+        <div class="modal-content-full" style="background: var(--color-bg); min-height: 100vh;">
+          <!-- Navbar -->
+          <div class="modal-navbar" style="background: var(--color-bg); border-bottom: 1px solid var(--color-card-border); padding-bottom: 16px;">
+            <!-- Spacer to keep title centered -->
+            <div style="width: 36px;"></div>
+            <span class="nav-title" style="color: var(--color-text);">收支統計</span>
+            <!-- Close button X -->
+            <button class="nav-back-circle" @click="showStatsModal = false" title="關閉" style="background: rgba(0, 0, 0, 0.05); color: var(--color-text); width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center;">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+            </button>
+          </div>
+
+          <div class="form-body" style="padding: 16px 0;">
+            <!-- Segmented Control for Stats Type -->
+            <div class="segmented-control" style="background-color: rgba(0, 0, 0, 0.04); border-radius: 20px; padding: 4px; display: flex; margin-bottom: 24px;">
+              <button 
+                type="button" 
+                class="seg-btn" 
+                :class="{ 'active-invest': statsType === 'invest' }"
+                style="border-radius: 16px; flex: 1; font-weight: 700; height: 40px;"
+                @click="statsType = 'invest'"
+              >
+                投資變動
+              </button>
+              <button 
+                type="button" 
+                class="seg-btn" 
+                :class="{ 'active-liquid': statsType === 'liquid' }"
+                style="border-radius: 16px; flex: 1; font-weight: 700; height: 40px;"
+                @click="statsType = 'liquid'"
+              >
+                流動資金
+              </button>
+            </div>
+
+            <!-- Summary Section -->
+            <div style="text-align: left; padding: 0 8px; margin-bottom: 24px;">
+              <div style="font-size: 0.85rem; color: var(--color-text-muted); font-weight: bold; margin-bottom: 8px;">
+                {{ statsSummaryText.title }}
+              </div>
+              <div style="font-size: 1.1rem; font-weight: 800; color: var(--color-text); line-height: 1.5;">
+                {{ statsSummaryText.desc1 }}<br/>{{ statsSummaryText.desc2 }}
+              </div>
+            </div>
+
+            <!-- Legend Section -->
+            <div style="display: flex; gap: 24px; align-items: center; margin-bottom: 24px; padding-left: 8px;">
+              <template v-if="statsType === 'invest'">
+                <div style="display: flex; align-items: center; gap: 6px; font-size: 0.82rem; font-weight: bold; color: var(--color-text);">
+                  <span style="display: inline-block; width: 12px; height: 12px; background: #ccd7f5; border-radius: 2px;"></span>
+                  帳戶改變
+                </div>
+                <div style="display: flex; align-items: center; gap: 6px; font-size: 0.82rem; font-weight: bold; color: var(--color-text);">
+                  <span style="display: inline-block; width: 12px; height: 12px; background: #5c67f5; border-radius: 2px;"></span>
+                  持倉盈虧
+                </div>
+              </template>
+              <template v-else>
+                <div style="display: flex; align-items: center; gap: 6px; font-size: 0.82rem; font-weight: bold; color: var(--color-text);">
+                  <span style="display: inline-block; width: 12px; height: 12px; background: #2ebd59; border-radius: 2px;"></span>
+                  收入
+                </div>
+                <div style="display: flex; align-items: center; gap: 6px; font-size: 0.82rem; font-weight: bold; color: var(--color-text);">
+                  <span style="display: inline-block; width: 12px; height: 12px; background: #d1d5db; border-radius: 2px;"></span>
+                  支出
+                </div>
+              </template>
+            </div>
+
+            <!-- Bar Chart Container -->
+            <div style="height: 280px; position: relative; margin-bottom: 32px; padding: 0 4px;">
+              <Bar :data="statsChartData" :options="statsChartOptions" />
+            </div>
+
+            <!-- Time Filter Selector (matching design exactly) -->
+            <div style="display: flex; background: rgba(0, 0, 0, 0.04); padding: 4px; border-radius: 25px; gap: 4px; margin-bottom: 20px;">
+              <button 
+                v-for="time in [
+                  { label: '5周', value: '5W' },
+                  { label: '6月', value: '6M' },
+                  { label: '1年', value: '1Y' },
+                  { label: '年初至今', value: 'YTD' },
+                  { label: '4年', value: '4Y' }
+                ]"
+                :key="time.value"
+                @click="statsTimeFilter = time.value"
+                :style="{
+                  flex: 1,
+                  padding: '10px 0',
+                  borderRadius: '20px',
+                  border: 'none',
+                  fontSize: '0.82rem',
+                  fontWeight: '700',
+                  cursor: 'pointer',
+                  background: statsTimeFilter === time.value ? '#ffffff' : 'transparent',
+                  color: statsTimeFilter === time.value ? 'var(--color-text)' : 'var(--color-text-muted)',
+                  boxShadow: statsTimeFilter === time.value ? '0 2px 4px rgba(0,0,0,0.05)' : 'none'
+                }"
+              >
+                {{ time.label }}
+              </button>
+            </div>
+
+          </div>
+        </div>
+      </div>
+    </Transition>
+
     <!-- Floating Bottom Navigation -->
-    <BottomNav v-model:currentTab="currentTab" />
+    <BottomNav :currentTab="currentTab" @update:currentTab="handleBottomNavClick" />
 
   </div>
 
@@ -3772,14 +4118,17 @@ onActivated(() => {
 }
 
 .group-title-text {
-  font-size: 1.15rem;
-  font-weight: 800;
+  font-family: var(--font-family);
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
 }
 
 .group-value-text {
   font-family: var(--font-display);
-  font-size: 1.3rem;
+  font-size: 1.40rem;
   font-weight: 800;
+  letter-spacing: -0.02em;
 }
 
 .group-body {
@@ -3789,10 +4138,13 @@ onActivated(() => {
 }
 
 .group-collapsed-body {
-  padding: 12px 20px;
+  padding: 14px 22px;
   text-align: left;
-  font-size: 0.8rem;
+  font-family: var(--font-family);
+  font-size: 0.95rem;
+  font-weight: 500;
   color: var(--color-text-muted);
+  letter-spacing: -0.01em;
 }
 
 /* Background Color Modifiers */
@@ -3835,15 +4187,18 @@ onActivated(() => {
 }
 
 .sub-item-name {
-  font-size: 0.95rem;
-  font-weight: 700;
+  font-family: var(--font-family);
+  font-size: 1.05rem;
+  font-weight: 600;
   color: var(--color-text);
+  letter-spacing: -0.01em;
 }
 
 .sub-item-desc {
-  font-size: 0.72rem;
+  font-family: var(--font-family);
+  font-size: 0.78rem;
   color: var(--color-text-muted);
-  margin-top: 2px;
+  margin-top: 3px;
   font-weight: 500;
 }
 
@@ -3853,9 +4208,10 @@ onActivated(() => {
 
 .sub-item-val {
   font-family: var(--font-display);
-  font-size: 1rem;
-  font-weight: 800;
+  font-size: 1.15rem;
+  font-weight: 700;
   color: var(--color-text);
+  letter-spacing: -0.01em;
 }
 
 .sub-item-date {
@@ -4583,6 +4939,16 @@ onActivated(() => {
   color: #ffffff !important;
 }
 
+.seg-btn.active-invest {
+  background: #5c67f5 !important;
+  color: #ffffff !important;
+}
+
+.seg-btn.active-liquid {
+  background: #2ebd59 !important;
+  color: #ffffff !important;
+}
+
 /* Expiry pill selector */
 .expiry-pill-selector {
   display: flex;
@@ -4752,6 +5118,12 @@ onActivated(() => {
 .list-sub-item-card:first-child {
   border-top: none;
 }
+.list-sub-item-card .sub-item-name {
+  font-size: 1.05rem;
+}
+.list-sub-item-card .sub-item-val {
+  font-size: 1.15rem;
+}
 
 .sub-item-right-val {
   display: flex;
@@ -4843,5 +5215,61 @@ onActivated(() => {
 .block-receivable-val {
   background-color: #8ba4e8;
   color: #121212;
+}
+
+/* Tab Fade Slide Transition */
+.fade-tab-enter-active,
+.fade-tab-leave-active {
+  transition: opacity 0.2s cubic-bezier(0.4, 0, 0.2, 1), transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.fade-tab-enter-from {
+  opacity: 0;
+  transform: translateY(8px);
+}
+.fade-tab-leave-to {
+  opacity: 0;
+  transform: translateY(-8px);
+}
+
+/* Smooth Collapsible Height Transition using CSS Grid */
+.collapsible-wrapper {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  overflow: hidden;
+}
+.collapsible-wrapper.expanded {
+  grid-template-rows: 1fr;
+}
+.collapsible-content {
+  min-height: 0;
+}
+
+/* Modal Slide Transition (iOS style slide-up from bottom) */
+.modal-slide-enter-active,
+.modal-slide-leave-active {
+  transition: opacity 0.33s cubic-bezier(0.32, 0.94, 0.6, 1), transform 0.33s cubic-bezier(0.32, 0.94, 0.6, 1);
+}
+.modal-slide-enter-from,
+.modal-slide-leave-to {
+  opacity: 0;
+  transform: translateY(100%);
+}
+
+/* Layout inline for small percentage blocks in treemap */
+.treemap-block.layout-inline {
+  flex-direction: row !important;
+  justify-content: flex-start !important;
+  align-items: center !important;
+  gap: 8px !important;
+  padding: 6px 16px !important;
+}
+.treemap-block.layout-inline .block-pct {
+  font-size: 1.3rem !important;
+}
+.treemap-block.layout-inline .block-name {
+  margin-top: 0 !important;
+  font-size: 0.8rem !important;
+  opacity: 0.85 !important;
 }
 </style>
