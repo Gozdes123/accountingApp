@@ -83,12 +83,22 @@ const statsChartData = computed(() => {
     let monthlyIncome = 0
     let monthlyExpense = 0
     accounts.value.forEach(acc => {
-      if (acc.auto_record && acc.auto_record.enabled) {
-        if (acc.auto_record.type === 'income') {
-          monthlyIncome += Number(acc.auto_record.amount || 0)
-        } else if (acc.auto_record.type === 'expense') {
-          monthlyExpense += Number(acc.auto_record.amount || 0)
+      if (acc.auto_record) {
+        let records = []
+        if (Array.isArray(acc.auto_record)) {
+          records = acc.auto_record
+        } else if (acc.auto_record.enabled) {
+          records = [acc.auto_record]
         }
+        records.forEach(ar => {
+          if (ar.enabled) {
+            if (ar.type === 'income') {
+              monthlyIncome += Number(ar.amount || 0)
+            } else if (ar.type === 'expense') {
+              monthlyExpense += Number(ar.amount || 0)
+            }
+          }
+        })
       }
     })
     
@@ -140,12 +150,22 @@ const statsSummaryText = computed(() => {
     let monthlyIncome = 0
     let monthlyExpense = 0
     accounts.value.forEach(acc => {
-      if (acc.auto_record && acc.auto_record.enabled) {
-        if (acc.auto_record.type === 'income') {
-          monthlyIncome += Number(acc.auto_record.amount || 0)
-        } else if (acc.auto_record.type === 'expense') {
-          monthlyExpense += Number(acc.auto_record.amount || 0)
+      if (acc.auto_record) {
+        let records = []
+        if (Array.isArray(acc.auto_record)) {
+          records = acc.auto_record
+        } else if (acc.auto_record.enabled) {
+          records = [acc.auto_record]
         }
+        records.forEach(ar => {
+          if (ar.enabled) {
+            if (ar.type === 'income') {
+              monthlyIncome += Number(ar.amount || 0)
+            } else if (ar.type === 'expense') {
+              monthlyExpense += Number(ar.amount || 0)
+            }
+          }
+        })
       }
     })
     const finalIncome = monthlyIncome || (totalLiquidAssets.value > 0 ? 1000000 : 0)
@@ -215,6 +235,11 @@ const usdTwdRate = ref(32)
 const isInitialDataLoaded = ref(false)
 const isHidden = ref(true)
 const isRefreshing = ref(false)
+
+// 複數自動記帳狀態
+const newAssetAutoRecords = ref([])
+const activeAutoRecord = ref(null)
+const activeAutoRecordIndex = ref(null)
 
 const showDeleteConfirm = ref(false)
 const deleteConfirmMessage = ref('')
@@ -320,6 +345,17 @@ const editAccount = (acc) => {
   isEditing.value = true
   editingId.value = acc.id
   
+  // 載入多個自動記帳紀錄
+  if (acc.auto_record) {
+    if (Array.isArray(acc.auto_record)) {
+      newAssetAutoRecords.value = JSON.parse(JSON.stringify(acc.auto_record))
+    } else {
+      newAssetAutoRecords.value = [JSON.parse(JSON.stringify(acc.auto_record))]
+    }
+  } else {
+    newAssetAutoRecords.value = []
+  }
+  
   newAsset.value = {
     category: getCategoryFromType(acc.type),
     type: acc.type,
@@ -327,7 +363,7 @@ const editAccount = (acc) => {
     balance: acc.balance,
     include_in_chart: acc.include_in_chart ?? true,
     remarks: acc.remarks ?? '',
-    auto_record: acc.auto_record ? JSON.parse(JSON.stringify(acc.auto_record)) : null,
+    auto_record: null, // 我們改用 newAssetAutoRecords 來管理列表
     custom_group: acc.custom_group ?? '',
     funding_account_id: null
   }
@@ -367,10 +403,11 @@ const editInvestmentBySymbol = (symbol) => {
 
 const handleTagInput = (e) => {
   let val = e.target.value
+  if (!activeAutoRecord.value) return
   if (val && !val.startsWith('#')) {
-    newAsset.value.auto_record.tag = '#' + val
+    activeAutoRecord.value.tag = '#' + val
   } else {
-    newAsset.value.auto_record.tag = val
+    activeAutoRecord.value.tag = val
   }
 }
 
@@ -385,36 +422,70 @@ const showToast = (msg) => {
 
 const autoRecordBackup = ref(null)
 
-const initAutoRecord = () => {
-  autoRecordBackup.value = newAsset.value.auto_record ? JSON.parse(JSON.stringify(newAsset.value.auto_record)) : null
-  newAsset.value.auto_record = {
+const openAddAutoRecord = () => {
+  saveError.value = ''
+  activeAutoRecord.value = {
     enabled: true, 
     type: 'expense',
-    amount: 0,
+    amount: '',
     day: 1,
     tag: '',
     expiry: 'forever',
-    last_processed_date: null
+    expiry_date: new Date(new Date().setMonth(new Date().getMonth() + 12)).toISOString().split('T')[0],
+    last_processed_date: null,
+    target_account_id: null
   }
+  activeAutoRecordIndex.value = null
   addModalStep.value = 3
 }
 
-const enterAutoRecordConfig = () => {
-  autoRecordBackup.value = newAsset.value.auto_record ? JSON.parse(JSON.stringify(newAsset.value.auto_record)) : null
+const openEditAutoRecord = (idx) => {
+  saveError.value = ''
+  activeAutoRecord.value = JSON.parse(JSON.stringify(newAssetAutoRecords.value[idx]))
+  activeAutoRecordIndex.value = idx
   addModalStep.value = 3
 }
 
 const cancelAutoRecordConfig = () => {
-  newAsset.value.auto_record = autoRecordBackup.value
+  saveError.value = ''
+  activeAutoRecord.value = null
+  activeAutoRecordIndex.value = null
   addModalStep.value = 2
 }
 
+const saveAutoRecordConfig = () => {
+  if (!activeAutoRecord.value) return
+  if (activeAutoRecord.value.amount === '' || activeAutoRecord.value.amount === null) {
+    saveError.value = '請輸入金額'
+    return
+  }
+  if (activeAutoRecord.value.type === 'transfer' && !activeAutoRecord.value.target_account_id) {
+    saveError.value = '請選擇轉入目標帳戶'
+    return
+  }
+  
+  if (activeAutoRecordIndex.value !== null) {
+    newAssetAutoRecords.value[activeAutoRecordIndex.value] = { ...activeAutoRecord.value }
+  } else {
+    newAssetAutoRecords.value.push({ ...activeAutoRecord.value })
+  }
+  
+  saveError.value = ''
+  activeAutoRecord.value = null
+  activeAutoRecordIndex.value = null
+  addModalStep.value = 2
+}
+
+const deleteAutoRecord = (idx) => {
+  newAssetAutoRecords.value.splice(idx, 1)
+}
+
 const nextRecordDateStr = computed(() => {
-  if (!newAsset.value.auto_record) return ''
+  if (!activeAutoRecord.value) return ''
   const today = new Date()
   let targetMonth = today.getMonth()
   let targetYear = today.getFullYear()
-  const day = Number(newAsset.value.auto_record.day || 1)
+  const day = Number(activeAutoRecord.value.day || 1)
   
   if (today.getDate() >= day) {
     targetMonth++
@@ -425,6 +496,37 @@ const nextRecordDateStr = computed(() => {
   }
   return `${targetMonth + 1}月${day}日`
 })
+
+const autoRecordsSummary = computed(() => {
+  let income = 0
+  let expense = 0
+  newAssetAutoRecords.value.forEach(ar => {
+    const amt = Number(ar.amount || 0)
+    if (ar.type === 'income') {
+      income += amt
+    } else {
+      expense += amt
+    }
+  })
+  return {
+    income: income.toLocaleString('zh-TW', { style: 'currency', currency: 'TWD', minimumFractionDigits: 0 }),
+    expense: expense.toLocaleString('zh-TW', { style: 'currency', currency: 'TWD', minimumFractionDigits: 0 })
+  }
+})
+
+const getNextTxDateStr = (day) => {
+  const today = new Date()
+  let m = today.getMonth() + 1
+  let y = today.getFullYear()
+  if (today.getDate() >= Number(day)) {
+    m++
+    if (m > 12) {
+      m = 1
+      y++
+    }
+  }
+  return `${m}月${day}日`
+}
 
 // 新增項目 Modal
 const showAddModal = ref(false)
@@ -1537,6 +1639,7 @@ const selectSubtype = (category, subType, label) => {
   newAsset.value.buy_price = ''
   newAsset.value.buy_date = new Date().toISOString().split('T')[0]
   newAsset.value.custom_group = ''
+  newAssetAutoRecords.value = []
   
   addModalStep.value = 2 // Move to form input step
 }
@@ -1748,7 +1851,7 @@ const addAssetItem = async () => {
         balance: Math.abs(Number(newAsset.value.balance)),
         include_in_chart: newAsset.value.include_in_chart ?? true,
         remarks: newAsset.value.remarks ?? '',
-        auto_record: newAsset.value.auto_record ? JSON.parse(JSON.stringify(newAsset.value.auto_record)) : null,
+        auto_record: newAssetAutoRecords.value.length > 0 ? JSON.parse(JSON.stringify(newAssetAutoRecords.value)) : null,
         created_at: isEditing.value ? (accounts.value.find(a => a.id === editingId.value)?.created_at || nowStr) : nowStr,
         custom_group: newAsset.value.custom_group || ''
       }
@@ -1757,7 +1860,8 @@ const addAssetItem = async () => {
         name: payload.name,
         type: payload.type,
         balance: payload.balance,
-        custom_group: payload.custom_group
+        custom_group: payload.custom_group,
+        auto_record: payload.auto_record
       }
       
       if (isEditing.value) {
@@ -2106,6 +2210,7 @@ const selectProvider = (item) => {
   newAsset.value.include_in_chart = true
   newAsset.value.remarks = ''
   newAsset.value.auto_record = null
+  newAssetAutoRecords.value = []
 
   addModalStep.value = 2
 }
@@ -2170,57 +2275,82 @@ const processAutoRecords = async () => {
   
   for (let i = 0; i < updatedAccounts.length; i++) {
     const acc = updatedAccounts[i]
-    if (acc.auto_record && acc.auto_record.enabled) {
-      const ar = acc.auto_record
-      const day = Number(ar.day || 1)
-      
-      let lastProcessedYear = 0
-      let lastProcessedMonth = -1
-      
-      if (ar.last_processed_date) {
-        const lpd = new Date(ar.last_processed_date)
-        lastProcessedYear = lpd.getFullYear()
-        lastProcessedMonth = lpd.getMonth()
+    if (acc.auto_record) {
+      // 標準化為陣列處理，相容舊有單一物件格式
+      let records = []
+      if (Array.isArray(acc.auto_record)) {
+        records = acc.auto_record
+      } else if (acc.auto_record.enabled) {
+        records = [acc.auto_record]
       }
       
-      const isCurrentMonthProcessed = (lastProcessedYear === currentYear && lastProcessedMonth === currentMonth)
-      
-      if (currentDay >= day && !isCurrentMonthProcessed) {
-        const amount = Number(ar.amount || 0)
-        const type = ar.type
+      let recordChanged = false
+      for (const ar of records) {
+        if (!ar.enabled) continue
         
-        if (type === 'income') {
-          acc.balance += amount
-          showToast(`自動記帳：${acc.name} 固定收入 TWD ${amount}`)
-        } else if (type === 'expense') {
-          acc.balance -= amount
-          if (acc.balance < 0) acc.balance = 0
-          showToast(`自動記帳：${acc.name} 固定支出 TWD ${amount}`)
-        } else if (type === 'transfer') {
-          const targetAcc = updatedAccounts.find(a => a.id === ar.target_account_id)
-          if (targetAcc) {
-            acc.balance -= amount
-            if (acc.balance < 0) acc.balance = 0
-            
-            // 如果轉入的目標帳戶是負債類（如：房貸、信貸、信用卡），轉帳代表還款，應減少負債餘額
-            const liabTypes = ['Credit Card', 'Liability', 'Loan', 'Payable', 'OtherLiab']
-            if (liabTypes.includes(targetAcc.type)) {
-              targetAcc.balance -= amount
-              if (targetAcc.balance < 0) targetAcc.balance = 0
-            } else {
-              targetAcc.balance += amount
-            }
-            
-            targetAcc._dirty = true
-            showToast(`自動轉帳：從 ${acc.name} 轉帳至 ${targetAcc.name} TWD ${amount}`)
-          } else {
-            console.warn(`Target account ${ar.target_account_id} not found for transfer`)
+        // Expiry check
+        if (ar.expiry === 'custom' && ar.expiry_date) {
+          const expDate = new Date(ar.expiry_date + 'T23:59:59')
+          const recordDate = new Date(currentYear, currentMonth, Number(ar.day || 1))
+          if (recordDate > expDate) {
+            continue
           }
         }
         
-        ar.last_processed_date = today.toISOString()
+        const day = Number(ar.day || 1)
+        
+        let lastProcessedYear = 0
+        let lastProcessedMonth = -1
+        
+        if (ar.last_processed_date) {
+          const lpd = new Date(ar.last_processed_date)
+          lastProcessedYear = lpd.getFullYear()
+          lastProcessedMonth = lpd.getMonth()
+        }
+        
+        const isCurrentMonthProcessed = (lastProcessedYear === currentYear && lastProcessedMonth === currentMonth)
+        
+        if (currentDay >= day && !isCurrentMonthProcessed) {
+          const amount = Number(ar.amount || 0)
+          const type = ar.type
+          
+          if (type === 'income') {
+            acc.balance += amount
+            showToast(`自動記帳：${acc.name} 固定收入 TWD ${amount}`)
+          } else if (type === 'expense') {
+            acc.balance -= amount
+            if (acc.balance < 0) acc.balance = 0
+            showToast(`自動記帳：${acc.name} 固定支出 TWD ${amount}`)
+          } else if (type === 'transfer') {
+            const targetAcc = updatedAccounts.find(a => a.id === ar.target_account_id)
+            if (targetAcc) {
+              acc.balance -= amount
+              if (acc.balance < 0) acc.balance = 0
+              
+              // 如果轉入的目標帳戶是負債類（如：房貸、信貸、信用卡），轉帳代表還款，應減少負債餘額
+              const liabTypes = ['Credit Card', 'Liability', 'Loan', 'Payable', 'OtherLiab']
+              if (liabTypes.includes(targetAcc.type)) {
+                targetAcc.balance -= amount
+                if (targetAcc.balance < 0) targetAcc.balance = 0
+              } else {
+                targetAcc.balance += amount
+              }
+              
+              targetAcc._dirty = true
+              showToast(`自動轉帳：從 ${acc.name} 轉帳至 ${targetAcc.name} TWD ${amount}`)
+            } else {
+              console.warn(`Target account ${ar.target_account_id} not found for transfer`)
+            }
+          }
+          
+          ar.last_processed_date = today.toISOString()
+          recordChanged = true
+          changed = true
+        }
+      }
+      
+      if (recordChanged) {
         acc._dirty = true
-        changed = true
       }
     }
   }
@@ -3545,19 +3675,75 @@ onActivated(() => {
             </div>
 
             <!-- Auto-Record bar under Case B -->
-            <div class="auto-record-bar-row">
-              <div class="auto-record-left">
-                <PhArrowClockwise size="20" class="auto-record-icon" />
-                <span>自動記</span>
-              </div>
-              <button v-if="!newAsset.auto_record" type="button" class="btn-add-auto-record" @click="initAutoRecord">
-                新增自動記
-              </button>
-              <div v-else class="auto-record-info-badge">
-                <button type="button" class="btn-add-auto-record" @click="enterAutoRecordConfig" style="border-color: #3a59cc; color: #3a59cc;">
-                  {{ newAsset.auto_record.type === 'income' ? '固定收入' : '固定支出' }} 每月{{ newAsset.auto_record.day }}日
+            <div style="margin-top: 24px; margin-bottom: 8px;">
+              <!-- Header Row -->
+              <div style="display: flex; align-items: center; justify-content: space-between; width: 100%; margin-bottom: 6px;">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <PhArrowClockwise size="22" style="color: var(--color-text); opacity: 0.85;" />
+                  <span style="font-size: 1.05rem; font-weight: 700; color: var(--color-text);">自動記</span>
+                </div>
+                <button type="button" @click="openAddAutoRecord" style="background: transparent; border: 1.5px solid var(--color-text-muted); color: var(--color-text); padding: 5px 14px; border-radius: 50px; font-size: 0.8rem; font-weight: 700; box-shadow: none; cursor: pointer; transition: all 0.2s; margin: 0; min-height: unset; height: auto;" onmouseover="this.style.background='rgba(255,255,255,0.05)'" onmouseout="this.style.background='transparent'">
+                  新增自動記
                 </button>
-                <button type="button" class="badge-clear-btn" @click="newAsset.auto_record = null">清除</button>
+              </div>
+              
+              <!-- Summary Row -->
+              <div style="text-align: right; font-size: 0.78rem; color: var(--color-text-muted); margin-bottom: 12px; padding-right: 4px;">
+                總計：+{{ autoRecordsSummary.income }}，-{{ autoRecordsSummary.expense }}
+              </div>
+              
+              <!-- Cards List -->
+              <div v-if="newAssetAutoRecords.length > 0" style="display: flex; flex-direction: column; gap: 12px; width: 100%;">
+                <div v-for="(ar, idx) in newAssetAutoRecords" :key="idx" class="auto-record-card-spec" style="position: relative; display: flex; align-items: center; justify-content: space-between; padding: 18px 20px; background: rgba(0, 0, 0, 0.02); border: 1px solid var(--color-card-border); border-radius: 18px; box-sizing: border-box; width: 100%; transition: all 0.2s; cursor: pointer;" @click="openEditAutoRecord(idx)">
+                  <!-- Left Info -->
+                  <div style="display: flex; flex-direction: column; align-items: flex-start; gap: 8px; text-align: left; flex: 1; min-width: 0;">
+                    <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap; width: 100%;">
+                      <!-- Type Badge -->
+                      <span :style="{
+                        fontSize: '0.72rem',
+                        fontWeight: '700',
+                        padding: '3px 8px',
+                        borderRadius: '6px',
+                        border: ar.type === 'income' ? '1px solid var(--color-success)' : ar.type === 'expense' ? '1px solid var(--color-accent)' : '1px solid var(--color-primary)',
+                        color: ar.type === 'income' ? 'var(--color-success)' : ar.type === 'expense' ? 'var(--color-accent)' : 'var(--color-primary)',
+                        background: 'transparent'
+                      }">
+                        {{ ar.type === 'income' ? '固定增加' : ar.type === 'expense' ? '固定減少' : '定期轉帳' }}
+                      </span>
+                      <!-- Tag -->
+                      <span v-if="ar.tag" style="font-size: 0.85rem; font-weight: 700; color: var(--color-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 120px;">
+                        {{ ar.tag.startsWith('#') ? ar.tag : '#' + ar.tag }}
+                      </span>
+                      <!-- Transfer details -->
+                      <span style="font-size: 0.72rem; font-weight: normal; color: var(--color-text-muted);" v-if="ar.type === 'transfer'">
+                        (至: {{ accounts.find(a => a.id === ar.target_account_id)?.name || '未知' }})
+                      </span>
+                    </div>
+                    <!-- Date -->
+                    <div style="font-size: 0.82rem; color: var(--color-text-muted); font-weight: 500;">
+                      每月{{ ar.day }}日
+                    </div>
+                    <!-- Next Tx Capsule -->
+                    <div style="background: rgba(0, 0, 0, 0.04); padding: 4px 10px; border-radius: 8px; font-size: 0.72rem; color: var(--color-text-muted); font-weight: 600;">
+                      下次交易時間 {{ getNextTxDateStr(ar.day) }}
+                    </div>
+                  </div>
+                  
+                  <!-- Right Amount & Controls -->
+                  <div style="display: flex; align-items: center; gap: 12px; flex-shrink: 0;">
+                    <span :style="{
+                      fontSize: '1.25rem',
+                      fontWeight: '800',
+                      color: ar.type === 'income' ? 'var(--color-success)' : 'var(--color-text)'
+                    }">
+                      {{ ar.type === 'income' ? '+' : '-' }}{{ Number(ar.amount).toLocaleString('zh-TW', { style: 'currency', currency: 'TWD', minimumFractionDigits: 0 }) }}
+                    </span>
+                    <!-- Delete Button inside Card -->
+                    <button type="button" @click.stop="deleteAutoRecord(idx)" style="background: rgba(224, 59, 84, 0.08); border: none; padding: 6px; border-radius: 8px; box-shadow: none; cursor: pointer; color: var(--color-danger); display: flex; align-items: center; justify-content: center; width: 26px; height: 26px; margin: 0; min-height: unset; height: auto;" onmouseover="this.style.background='rgba(224, 59, 84, 0.15)'" onmouseout="this.style.background='rgba(224, 59, 84, 0.08)'">
+                      <PhTrash size="13" weight="bold" />
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
           </template>
@@ -3585,39 +3771,38 @@ onActivated(() => {
             <PhCaretLeft size="20" weight="bold" />
           </button>
           <span class="nav-title">自動記</span>
-          <button class="nav-save-circle" @click="addModalStep = 2" title="確定">
+          <button class="nav-save-circle" @click="saveAutoRecordConfig()" title="確定">
             <PhCheck size="20" weight="bold" />
           </button>
         </div>
 
-        <div class="form-body" v-if="newAsset.auto_record">
+        <div class="form-body" v-if="activeAutoRecord">
           <!-- Tabs Segmented Control -->
           <div class="segmented-control" style="background-color: rgba(0, 0, 0, 0.04); border-radius: 14px; padding: 4px; display: flex;">
             <button 
               type="button" 
               class="seg-btn active-income" 
-              :class="{ active: newAsset.auto_record.type === 'income' }"
+              :class="{ active: activeAutoRecord.type === 'income' }"
               style="border-radius: 10px; flex: 1;"
-              @click="newAsset.auto_record.type = 'income'; newAsset.auto_record.target_account_id = null"
+              @click="activeAutoRecord.type = 'income'; activeAutoRecord.target_account_id = null"
             >
               固定收入
             </button>
             <button 
               type="button" 
               class="seg-btn active-expense" 
-              :class="{ active: newAsset.auto_record.type === 'expense' }"
+              :class="{ active: activeAutoRecord.type === 'expense' }"
               style="border-radius: 10px; flex: 1;"
-              @click="newAsset.auto_record.type = 'expense'; newAsset.auto_record.target_account_id = null"
+              @click="activeAutoRecord.type = 'expense'; activeAutoRecord.target_account_id = null"
             >
               固定支出
             </button>
             <button 
               type="button" 
-              class="seg-btn" 
-              :style="{ background: newAsset.auto_record.type === 'transfer' ? '#3a59cc' : 'transparent', color: newAsset.auto_record.type === 'transfer' ? '#ffffff' : 'var(--color-text-muted)' }"
-              :class="{ active: newAsset.auto_record.type === 'transfer' }"
-              style="border-radius: 10px; flex: 1; font-weight: 700;"
-              @click="newAsset.auto_record.type = 'transfer'"
+              class="seg-btn active-transfer" 
+              :class="{ active: activeAutoRecord.type === 'transfer' }"
+              style="border-radius: 10px; flex: 1;"
+              @click="activeAutoRecord.type = 'transfer'"
             >
               定期轉帳
             </button>
@@ -3631,8 +3816,8 @@ onActivated(() => {
                 <span class="row-sublabel">TWD</span>
               </div>
               <div class="row-value-wrapper">
-                <input v-model.number="newAsset.auto_record.amount" type="number" placeholder="0" class="input-flat-right" />
-                <button type="button" class="minus-circle-btn" @click="newAsset.auto_record.amount = 0">
+                <input v-model.number="activeAutoRecord.amount" type="number" placeholder="0" class="input-flat-right" />
+                <button type="button" class="minus-circle-btn" @click="activeAutoRecord.amount = 0">
                   <PhMinusCircle size="20" weight="bold" />
                 </button>
               </div>
@@ -3641,24 +3826,24 @@ onActivated(() => {
             <div class="form-item-row" style="position: relative;">
               <span class="row-label">記錄日期</span>
               <div class="row-value-wrapper">
-                <span class="display-val" style="color: var(--color-text-muted); font-size: 0.95rem; font-weight: 700;">每月{{ newAsset.auto_record.day }}日</span>
+                <span class="display-val" style="color: var(--color-text-muted); font-size: 0.95rem; font-weight: 700;">每月{{ activeAutoRecord.day }}日</span>
                 <PhCaretRight size="16" class="chevron-icon" />
               </div>
-              <select v-model.number="newAsset.auto_record.day" class="invisible-select">
+              <select v-model.number="activeAutoRecord.day" class="invisible-select">
                 <option v-for="d in 28" :key="d" :value="d">每月{{ d }}日</option>
               </select>
             </div>
 
             <!-- Target Account (Only for Transfer type) -->
-            <div v-if="newAsset.auto_record.type === 'transfer'" class="form-item-row" style="position: relative; border-bottom: none;">
+            <div v-if="activeAutoRecord.type === 'transfer'" class="form-item-row" style="position: relative; border-bottom: none;">
               <span class="row-label">轉入目標帳戶</span>
               <div class="row-value-wrapper">
                 <span class="display-val" style="color: var(--color-text); font-size: 0.95rem; font-weight: 700;">
-                  {{ accounts.find(a => a.id === newAsset.auto_record.target_account_id)?.name || '請選擇帳戶' }}
+                  {{ accounts.find(a => a.id === activeAutoRecord.target_account_id)?.name || '請選擇帳戶' }}
                 </span>
                 <PhCaretRight size="16" class="chevron-icon" />
               </div>
-              <select v-model="newAsset.auto_record.target_account_id" class="invisible-select">
+              <select v-model="activeAutoRecord.target_account_id" class="invisible-select">
                 <option :value="null" disabled>請選擇帳戶</option>
                 <option 
                   v-for="acc in accounts.filter(a => a.id !== editingId)" 
@@ -3672,7 +3857,7 @@ onActivated(() => {
 
             <div class="form-item-row" style="border-bottom: none;">
               <span class="row-label">標籤</span>
-              <input v-model="newAsset.auto_record.tag" placeholder="#輸入標籤" class="input-flat-right text-right red-text red-placeholder" @input="handleTagInput" />
+              <input v-model="activeAutoRecord.tag" placeholder="#輸入標籤" class="input-flat-right text-right red-text red-placeholder" @input="handleTagInput" />
             </div>
           </div>
 
@@ -3680,18 +3865,25 @@ onActivated(() => {
             下次記錄時間：{{ nextRecordDateStr }}
           </div>
 
+          <div v-if="saveError" class="save-error" style="margin-top: 16px;">⚠️ {{ saveError }}</div>
+
           <!-- Card 2 -->
           <div class="form-card-black">
             <div class="form-item-row" style="border-bottom: none;">
               <span class="row-label">有效期</span>
               <div class="expiry-pill-selector">
-                <button type="button" class="expiry-pill" :class="{ active: newAsset.auto_record.expiry === 'forever' }" @click="newAsset.auto_record.expiry = 'forever'">
+                <button type="button" class="expiry-pill" :class="{ active: activeAutoRecord.expiry === 'forever' }" @click="activeAutoRecord.expiry = 'forever'">
                   永遠
                 </button>
-                <button type="button" class="expiry-pill" :class="{ active: newAsset.auto_record.expiry === 'custom' }" @click="newAsset.auto_record.expiry = 'custom'">
+                <button type="button" class="expiry-pill" :class="{ active: activeAutoRecord.expiry === 'custom' }" @click="activeAutoRecord.expiry = 'custom'; if(!activeAutoRecord.expiry_date) activeAutoRecord.expiry_date = new Date(new Date().setMonth(new Date().getMonth() + 12)).toISOString().split('T')[0]">
                   自訂
                 </button>
               </div>
+            </div>
+            <!-- If custom expiry, show date picker row -->
+            <div v-if="activeAutoRecord.expiry === 'custom'" class="form-item-row" style="border-bottom: none; border-top: 1px solid var(--color-card-border); display: flex; justify-content: space-between; align-items: center;">
+              <span class="row-label">結束日期</span>
+              <input v-model="activeAutoRecord.expiry_date" type="date" class="input-flat-right text-right" style="color: var(--color-text); font-weight: bold; border: none; background: transparent; font-family: inherit; font-size: 0.95rem;" />
             </div>
           </div>
 
@@ -5407,6 +5599,11 @@ onActivated(() => {
 }
 
 .seg-btn.active-expense.active {
+  background: #3a59cc !important;
+  color: #ffffff !important;
+}
+
+.seg-btn.active-transfer.active {
   background: #3a59cc !important;
   color: #ffffff !important;
 }
