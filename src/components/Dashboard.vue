@@ -2185,7 +2185,16 @@ const processAutoRecords = async () => {
           if (targetAcc) {
             acc.balance -= amount
             if (acc.balance < 0) acc.balance = 0
-            targetAcc.balance += amount
+            
+            // 如果轉入的目標帳戶是負債類（如：房貸、信貸、信用卡），轉帳代表還款，應減少負債餘額
+            const liabTypes = ['Credit Card', 'Liability', 'Loan', 'Payable', 'OtherLiab']
+            if (liabTypes.includes(targetAcc.type)) {
+              targetAcc.balance -= amount
+              if (targetAcc.balance < 0) targetAcc.balance = 0
+            } else {
+              targetAcc.balance += amount
+            }
+            
             targetAcc._dirty = true
             showToast(`自動轉帳：從 ${acc.name} 轉帳至 ${targetAcc.name} TWD ${amount}`)
           } else {
@@ -4918,6 +4927,8 @@ onActivated(() => {
   gap: 8px;
   margin-top: 8px;
   margin-bottom: 4px;
+  overflow: hidden;
+  max-height: 300px;
 }
 
 .sub-type-item {
@@ -5089,8 +5100,12 @@ onActivated(() => {
 }
 
 /* Transitions */
-.accordion-slide-enter-active { transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1); }
-.accordion-slide-leave-active { transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
+.accordion-slide-enter-active {
+  transition: max-height 0.25s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.25s ease, transform 0.25s ease;
+}
+.accordion-slide-leave-active {
+  transition: max-height 0.2s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.2s ease, transform 0.2s ease;
+}
 .accordion-slide-enter-from, .accordion-slide-leave-to {
   opacity: 0;
   transform: translateY(-8px);
