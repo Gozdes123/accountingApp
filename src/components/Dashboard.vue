@@ -2540,7 +2540,7 @@ onActivated(() => {
               <span class="block-pct">{{ receivablePct }}%</span>
               <span class="block-name">應收款</span>
             </div>
-            <div v-if="totalPositiveAssets === 0" class="treemap-block" style="flex: 1; background: #2c2c2e; color: rgba(255,255,255,0.4); justify-content: center; align-items: center;">
+            <div v-if="totalPositiveAssets === 0" class="treemap-block" style="flex: 1; background: var(--color-card-bg); border: 2px dashed var(--color-card-border); color: var(--color-text-muted); justify-content: center; align-items: center; font-weight: 500;">
               <span>無資產分配數據</span>
             </div>
           </div>
