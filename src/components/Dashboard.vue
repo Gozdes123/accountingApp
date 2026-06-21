@@ -3010,14 +3010,14 @@ onActivated(() => {
         </div>
 
         <!-- Custom Date Picker Row -->
-        <div v-if="timeFilter === 'ALL'" style="display: flex; gap: 12px; align-items: center; margin-bottom: 20px; padding: 0 4px;">
-          <div style="flex: 1; display: flex; flex-direction: column; gap: 4px; text-align: left;">
+        <div v-if="timeFilter === 'ALL'" style="display: flex; gap: 12px; align-items: center; margin-bottom: 20px; padding: 0 4px; width: 100%; box-sizing: border-box;">
+          <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; text-align: left;">
             <span style="font-size: 0.75rem; color: var(--color-text-muted); font-weight: bold;">開始日期</span>
-            <input type="date" v-model="customStartDate" class="reset-input" style="background: #f1f5f9 !important; border: 1px solid rgba(0,0,0,0.08) !important; color: var(--color-text) !important; padding: 8px 12px !important; border-radius: 12px !important; font-size: 0.85rem !important; width: 100% !important; outline: none; margin: 0 !important; height: auto !important; line-height: normal !important;" />
+            <input type="date" v-model="customStartDate" class="reset-input" style="background: #f1f5f9 !important; border: 1px solid rgba(0,0,0,0.08) !important; color: var(--color-text) !important; padding: 8px 12px !important; border-radius: 12px !important; font-size: 0.85rem !important; width: 100% !important; box-sizing: border-box !important; outline: none; margin: 0 !important; height: auto !important; line-height: normal !important;" />
           </div>
-          <div style="flex: 1; display: flex; flex-direction: column; gap: 4px; text-align: left;">
+          <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; text-align: left;">
             <span style="font-size: 0.75rem; color: var(--color-text-muted); font-weight: bold;">結束日期</span>
-            <input type="date" v-model="customEndDate" class="reset-input" style="background: #f1f5f9 !important; border: 1px solid rgba(0,0,0,0.08) !important; color: var(--color-text) !important; padding: 8px 12px !important; border-radius: 12px !important; font-size: 0.85rem !important; width: 100% !important; outline: none; margin: 0 !important; height: auto !important; line-height: normal !important;" />
+            <input type="date" v-model="customEndDate" class="reset-input" style="background: #f1f5f9 !important; border: 1px solid rgba(0,0,0,0.08) !important; color: var(--color-text) !important; padding: 8px 12px !important; border-radius: 12px !important; font-size: 0.85rem !important; width: 100% !important; box-sizing: border-box !important; outline: none; margin: 0 !important; height: auto !important; line-height: normal !important;" />
           </div>
         </div>
 
