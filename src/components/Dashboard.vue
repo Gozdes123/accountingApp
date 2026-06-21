@@ -92,6 +92,17 @@ const statsChartData = computed(() => {
         }
         records.forEach(ar => {
           if (ar.enabled) {
+            // Expiry check
+            if (ar.expiry === 'custom' && ar.expiry_date) {
+              const expDate = new Date(ar.expiry_date + 'T23:59:59')
+              if (new Date() > expDate) return
+            }
+            // Creation check (若本月的記帳日早於創建時間，代表本月不執行，不計入本月圖表)
+            if (ar.created_at) {
+              const today = new Date()
+              const scheduledDate = new Date(today.getFullYear(), today.getMonth(), Number(ar.day || 1))
+              if (new Date(ar.created_at) > scheduledDate) return
+            }
             if (ar.type === 'income') {
               monthlyIncome += Number(ar.amount || 0)
             } else if (ar.type === 'expense') {
@@ -102,8 +113,8 @@ const statsChartData = computed(() => {
       }
     })
     
-    const finalIncome = monthlyIncome || (totalLiquidAssets.value > 0 ? 1000000 : 0)
-    const finalExpense = monthlyExpense || 0
+    const finalIncome = monthlyIncome
+    const finalExpense = monthlyExpense
     
     const incomeData = [0, 0, 0, 0, 0, finalIncome]
     const expenseData = [0, 0, 0, 0, 0, finalExpense]
@@ -159,6 +170,17 @@ const statsSummaryText = computed(() => {
         }
         records.forEach(ar => {
           if (ar.enabled) {
+            // Expiry check
+            if (ar.expiry === 'custom' && ar.expiry_date) {
+              const expDate = new Date(ar.expiry_date + 'T23:59:59')
+              if (new Date() > expDate) return
+            }
+            // Creation check (若本月的記帳日早於創建時間，代表本月不執行，不計入本月圖表)
+            if (ar.created_at) {
+              const today = new Date()
+              const scheduledDate = new Date(today.getFullYear(), today.getMonth(), Number(ar.day || 1))
+              if (new Date(ar.created_at) > scheduledDate) return
+            }
             if (ar.type === 'income') {
               monthlyIncome += Number(ar.amount || 0)
             } else if (ar.type === 'expense') {
@@ -168,8 +190,8 @@ const statsSummaryText = computed(() => {
         })
       }
     })
-    const finalIncome = monthlyIncome || (totalLiquidAssets.value > 0 ? 1000000 : 0)
-    const finalExpense = monthlyExpense || 0
+    const finalIncome = monthlyIncome
+    const finalExpense = monthlyExpense
     
     return {
       title: '2026年1月至6月',
@@ -433,7 +455,8 @@ const openAddAutoRecord = () => {
     expiry: 'forever',
     expiry_date: new Date(new Date().setMonth(new Date().getMonth() + 12)).toISOString().split('T')[0],
     last_processed_date: null,
-    target_account_id: null
+    target_account_id: null,
+    created_at: new Date().toISOString()
   }
   activeAutoRecordIndex.value = null
   addModalStep.value = 3
@@ -453,7 +476,7 @@ const cancelAutoRecordConfig = () => {
   addModalStep.value = 2
 }
 
-const saveAutoRecordConfig = () => {
+const saveAutoRecordConfig = async () => {
   if (!activeAutoRecord.value) return
   if (activeAutoRecord.value.amount === '' || activeAutoRecord.value.amount === null) {
     saveError.value = '請輸入金額'
@@ -467,17 +490,58 @@ const saveAutoRecordConfig = () => {
   if (activeAutoRecordIndex.value !== null) {
     newAssetAutoRecords.value[activeAutoRecordIndex.value] = { ...activeAutoRecord.value }
   } else {
+    // 若為新增且扣款日期已過，則標記本月已執行過，避免儲存後當天立刻被同步扣款
+    const today = new Date()
+    if (!activeAutoRecord.value.created_at) {
+      activeAutoRecord.value.created_at = today.toISOString()
+    }
+    if (Number(activeAutoRecord.value.day || 1) <= today.getDate()) {
+      activeAutoRecord.value.last_processed_date = today.toISOString()
+    }
     newAssetAutoRecords.value.push({ ...activeAutoRecord.value })
+  }
+  
+  // 若為編輯現有帳戶，直接同步至資料庫
+  if (isEditing.value && editingId.value) {
+    const acc = accounts.value.find(a => a.id === editingId.value)
+    if (acc) {
+      acc.auto_record = newAssetAutoRecords.value.length > 0 ? JSON.parse(JSON.stringify(newAssetAutoRecords.value)) : null
+      try {
+        await supabase.from('accounts').update({ auto_record: acc.auto_record }).eq('id', editingId.value)
+      } catch (dbErr) {
+        console.warn('Sync auto_record after configuration failed:', dbErr)
+      }
+      localStorage.setItem('local_accounts', JSON.stringify(accounts.value))
+    }
   }
   
   saveError.value = ''
   activeAutoRecord.value = null
   activeAutoRecordIndex.value = null
   addModalStep.value = 2
+  showToast('自動記帳已儲存')
 }
 
 const deleteAutoRecord = (idx) => {
-  newAssetAutoRecords.value.splice(idx, 1)
+  triggerDeleteConfirm('確定要刪除此自動記帳設定嗎？此動作將立即儲存。', async () => {
+    newAssetAutoRecords.value.splice(idx, 1)
+    
+    if (isEditing.value && editingId.value) {
+      const acc = accounts.value.find(a => a.id === editingId.value)
+      if (acc) {
+        acc.auto_record = newAssetAutoRecords.value.length > 0 ? JSON.parse(JSON.stringify(newAssetAutoRecords.value)) : null
+        
+        try {
+          await supabase.from('accounts').update({ auto_record: acc.auto_record }).eq('id', editingId.value)
+        } catch (dbErr) {
+          console.warn('Sync auto_record after deletion failed:', dbErr)
+        }
+        
+        localStorage.setItem('local_accounts', JSON.stringify(accounts.value))
+      }
+    }
+    showToast('自動記帳已刪除')
+  })
 }
 
 const nextRecordDateStr = computed(() => {
@@ -1527,17 +1591,16 @@ const fetchHistoricalSnapshots = async () => {
     amount
   })).sort((a, b) => new Date(a.date) - new Date(b.date))
 
-  // 生成模擬成長曲線
+  // 生成模擬成長曲線（改為平緩的當前淨資產，避免未有歷史紀錄時出現虛假的增長幅度）
   if (historyRecords.value.length <= 1) {
     const today = new Date()
     const mockData = []
     for (let i = 5; i >= 0; i--) {
       const d = new Date(today.getFullYear(), today.getMonth() - i, today.getDate())
       const dateStr = d.toISOString().split('T')[0]
-      const factor = 1 - (i * 0.05)
       mockData.push({
         date: dateStr,
-        amount: Math.round(netWorth.value * factor)
+        amount: netWorth.value
       })
     }
     historyRecords.value = mockData
