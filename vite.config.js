@@ -10,9 +10,9 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.ico', 'icon.svg', 'apple-touch-icon.png'],
       manifest: {
-        name: '個人記帳本',
-        short_name: '記帳本',
-        description: '你的專屬個人財務總管',
+        name: 'WealthFlow 豐流記帳',
+        short_name: 'WealthFlow',
+        description: '極致優雅的個人資產與財務總管',
         theme_color: '#0f172a',
         icons: [
           {
