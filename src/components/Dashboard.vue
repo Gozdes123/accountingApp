@@ -1288,16 +1288,29 @@ const doughnutChartOptions = {
 const togglePrivacy = () => { isHidden.value = !isHidden.value }
 
 const fetchAllData = async () => {
-  // 1. Fetch USD/TWD rate
+  // 1. 快取優先渲染 (SWR) — 如果本機有舊資料，直接先呈現在畫面上，達成秒開效果
+  const cachedAccs = localStorage.getItem('local_accounts')
+  const cachedInvs = localStorage.getItem('local_investments')
+  const cachedRate = localStorage.getItem('cached_usd_twd_rate')
+  
+  if (cachedAccs || cachedInvs) {
+    if (cachedAccs) accounts.value = JSON.parse(cachedAccs)
+    if (cachedInvs) investments.value = JSON.parse(cachedInvs)
+    if (cachedRate) usdTwdRate.value = Number(cachedRate)
+    isInitialDataLoaded.value = true
+  }
+
+  // 2. 背景抓取即時匯率
   try {
     const res = await fetch('https://api.exchangerate-api.com/v4/latest/USD')
     const rateData = await res.json()
     usdTwdRate.value = rateData.rates?.TWD ?? 32
+    localStorage.setItem('cached_usd_twd_rate', usdTwdRate.value.toString())
   } catch {
-    usdTwdRate.value = 32
+    if (!cachedRate) usdTwdRate.value = 32
   }
 
-  // Clear any existing mock data from local storage
+  // 清除快取中舊有的 Mock 資料
   let localAccs = JSON.parse(localStorage.getItem('local_accounts') || '[]')
   if (localAccs.some(a => String(a.id).startsWith('mock-'))) {
     localAccs = localAccs.filter(a => !String(a.id).startsWith('mock-'))
@@ -1310,7 +1323,7 @@ const fetchAllData = async () => {
     localStorage.setItem('local_investments', JSON.stringify(localInvs))
   }
 
-  // 2. Fetch Accounts (Supabase + localStorage fallback)
+  // 3. 背景獲取最新帳戶資料 (Supabase)
   let loadedAccounts = []
   try {
     const { data: accs, error: accsErr } = await supabase
@@ -1320,6 +1333,7 @@ const fetchAllData = async () => {
     
     if (!accsErr && accs && accs.length > 0) {
       loadedAccounts = accs
+      localStorage.setItem('local_accounts', JSON.stringify(accs))
     } else {
       loadedAccounts = JSON.parse(localStorage.getItem('local_accounts') || '[]')
     }
@@ -1330,7 +1344,7 @@ const fetchAllData = async () => {
   
   accounts.value = loadedAccounts
 
-  // 3. Fetch Investments (Supabase + localStorage fallback)
+  // 4. 背景獲取最新投資資料 (Supabase)
   let loadedInvestments = []
   try {
     const { data: invs, error: invsErr } = await supabase
@@ -1340,6 +1354,7 @@ const fetchAllData = async () => {
       
     if (!invsErr && invs && invs.length > 0) {
       loadedInvestments = invs
+      localStorage.setItem('local_investments', JSON.stringify(invs))
     } else {
       loadedInvestments = JSON.parse(localStorage.getItem('local_investments') || '[]')
     }
@@ -1350,12 +1365,13 @@ const fetchAllData = async () => {
   
   investments.value = loadedInvestments
 
+  // 所有最新資料同步完成後，確保關閉載入畫面
   isInitialDataLoaded.value = true
 
-  // 4. Process auto-record transactions
+  // 5. 處理自動記帳 / 自動轉帳
   await processAutoRecords()
 
-  // 5. Save daily snapshot
+  // 6. 儲存每日資產快照
   await saveDailySnapshot(netWorth.value)
 
   // 6. Sync groups list
@@ -2234,8 +2250,8 @@ const processAutoRecords = async () => {
 }
 
 // ── Custom Group Management ──────────────────────────────────────
-const customAccountGroupsList = ref(JSON.parse(localStorage.getItem('custom_account_groups') || '["流動資產", "固定資產"]'))
-const customInvestGroupsList = ref(JSON.parse(localStorage.getItem('custom_invest_groups') || '["台股", "美股"]'))
+const customAccountGroupsList = ref(JSON.parse(localStorage.getItem('custom_account_groups') || '[]'))
+const customInvestGroupsList = ref(JSON.parse(localStorage.getItem('custom_invest_groups') || '[]'))
 
 const activeGroupType = ref('account') // 'account' or 'invest'
 
@@ -2255,10 +2271,18 @@ const isInvestGroupExpanded = (groupName) => {
 
 
 const syncGroups = () => {
-  // 遷移歷史因選單顛倒導致儲存位置顛倒的自訂群組資料
-  let localAccountGroups = JSON.parse(localStorage.getItem('custom_account_groups') || '["流動資產", "固定資產"]')
-  let localInvestGroups = JSON.parse(localStorage.getItem('custom_invest_groups') || '["台股", "美股"]')
+  // 取得自訂群組，預設改為空陣列
+  let localAccountGroups = JSON.parse(localStorage.getItem('custom_account_groups') || '[]')
+  let localInvestGroups = JSON.parse(localStorage.getItem('custom_invest_groups') || '[]')
   
+  // 舊的預設群組：如果使用者沒有在使用，我們就自動過濾掉
+  const defaultAccountNames = ["流動資產", "固定資產"]
+  const defaultInvestNames = ["台股", "美股"]
+  
+  localAccountGroups = localAccountGroups.filter(g => !defaultAccountNames.includes(g))
+  localInvestGroups = localInvestGroups.filter(g => !defaultInvestNames.includes(g))
+  
+  // 遷移歷史因選單顛倒導致儲存位置顛倒的自訂群組資料
   const investKeywords = ["台股", "美股", "投資", "股票", "證券", "基金"]
   const accountKeywords = ["流動資產", "固定資產", "銀行", "現金", "負債"]
   
@@ -2268,9 +2292,6 @@ const syncGroups = () => {
   if (toMoveToInvest.length > 0 || toMoveToAccount.length > 0) {
     localAccountGroups = localAccountGroups.filter(g => !toMoveToInvest.includes(g)).concat(toMoveToAccount)
     localInvestGroups = localInvestGroups.filter(g => !toMoveToAccount.includes(g)).concat(toMoveToInvest)
-    
-    localStorage.setItem('custom_account_groups', JSON.stringify(Array.from(new Set(localAccountGroups))))
-    localStorage.setItem('custom_invest_groups', JSON.stringify(Array.from(new Set(localInvestGroups))))
   }
 
   const dbAccountGroups = new Set()
@@ -2283,13 +2304,12 @@ const syncGroups = () => {
     investments.value.forEach(i => { if (i.custom_group && i.custom_group.trim()) dbInvestGroups.add(i.custom_group.trim()) })
   }
   
-  const finalAccountGroups = JSON.parse(localStorage.getItem('custom_account_groups') || '["流動資產", "固定資產"]')
-  const mergedAccount = Array.from(new Set([...finalAccountGroups, ...dbAccountGroups]))
+  // 合併自訂群組與資料庫中實際有在使用的群組（避免刪除正在使用的群組）
+  const mergedAccount = Array.from(new Set([...localAccountGroups, ...dbAccountGroups]))
   localStorage.setItem('custom_account_groups', JSON.stringify(mergedAccount))
   customAccountGroupsList.value = mergedAccount
 
-  const finalInvestGroups = JSON.parse(localStorage.getItem('custom_invest_groups') || '["台股", "美股"]')
-  const mergedInvest = Array.from(new Set([...finalInvestGroups, ...dbInvestGroups]))
+  const mergedInvest = Array.from(new Set([...localInvestGroups, ...dbInvestGroups]))
   localStorage.setItem('custom_invest_groups', JSON.stringify(mergedInvest))
   customInvestGroupsList.value = mergedInvest
 }
