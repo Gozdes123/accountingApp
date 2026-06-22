@@ -5091,7 +5091,8 @@ onUnmounted(() => {
   width: 100%;
   max-width: 100%;
   margin: 0 auto;
-  height: 100vh;
+  height: 100%;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -5121,7 +5122,8 @@ onUnmounted(() => {
   justify-content: center;
   color: var(--color-text-muted);
   gap: 12px;
-  height: 100vh;
+  height: 100%;
+  height: 100dvh;
 }
 
 .loader-text {
