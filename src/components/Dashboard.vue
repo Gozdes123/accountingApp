@@ -1321,12 +1321,14 @@ const netWorthSummaryText = computed(() => {
   const nwDiff = last.netWorth - first.netWorth
   const nwPct = first.netWorth !== 0 ? Math.round((nwDiff / Math.abs(first.netWorth)) * 100) : (nwDiff !== 0 ? 100 : 0)
   const nwDirection = nwDiff >= 0 ? '增加' : '減少'
-  const nwText = `我的淨資產${nwDirection}了 ${formatInvestNumber(Math.abs(nwDiff))} 元，較期初 ${nwPct >= 0 ? '+' : ''}${nwPct}%`
+  const nwAmtText = isHidden.value ? '•••••• 元' : `${formatInvestNumber(Math.abs(nwDiff))} 元`
+  const nwText = `我的淨資產${nwDirection}了 ${nwAmtText}，較期初 ${nwPct >= 0 ? '+' : ''}${nwPct}%`
   
   const liabDiff = last.liabilities - first.liabilities
   const liabPct = first.liabilities !== 0 ? Math.round((liabDiff / Math.abs(first.liabilities)) * 100) : (liabDiff !== 0 ? 100 : 0)
   const liabDirection = liabDiff >= 0 ? '增加' : '減少'
-  const liabText = liabDiff === 0 ? '我的負債沒有改變' : `我的負債${liabDirection}了 ${formatInvestNumber(Math.abs(liabDiff))} 元，較期初 ${liabPct >= 0 ? '+' : ''}${liabPct}%`
+  const liabAmtText = isHidden.value ? '•••••• 元' : `${formatInvestNumber(Math.abs(liabDiff))} 元`
+  const liabText = liabDiff === 0 ? '我的負債沒有改變' : `我的負債${liabDirection}了 ${liabAmtText}，較期初 ${liabPct >= 0 ? '+' : ''}${liabPct}%`
   
   return { nw: nwText, liab: liabText }
 })
@@ -1341,12 +1343,14 @@ const liquidInvestSummaryText = computed(() => {
   const liqDiff = last.liquid - first.liquid
   const liqPct = first.liquid !== 0 ? Math.round((liqDiff / Math.abs(first.liquid)) * 100) : (liqDiff !== 0 ? 100 : 0)
   const liqDirection = liqDiff >= 0 ? '增加' : '減少'
-  const liqText = liqDiff === 0 ? '我的流動資金沒有改變' : `我的流動資金${liqDirection}了 ${formatInvestNumber(Math.abs(liqDiff))} 元，較期初 ${liqPct >= 0 ? '+' : ''}${liqPct}%`
+  const liqAmtText = isHidden.value ? '•••••• 元' : `${formatInvestNumber(Math.abs(liqDiff))} 元`
+  const liqText = liqDiff === 0 ? '我的流動資金沒有改變' : `我的流動資金${liqDirection}了 ${liqAmtText}，較期初 ${liqPct >= 0 ? '+' : ''}${liqPct}%`
   
   const invDiff = last.invest - first.invest
   const invPct = first.invest !== 0 ? Math.round((invDiff / Math.abs(first.invest)) * 100) : (invDiff !== 0 ? 100 : 0)
   const invDirection = invDiff >= 0 ? '增加' : '減少'
-  const invText = invDiff === 0 ? '我的投資沒有改變' : `我的投資${invDirection}了 ${formatInvestNumber(Math.abs(invDiff))} 元，較期初 ${invPct >= 0 ? '+' : ''}${invPct}%`
+  const invAmtText = isHidden.value ? '•••••• 元' : `${formatInvestNumber(Math.abs(invDiff))} 元`
+  const invText = invDiff === 0 ? '我的投資沒有改變' : `我的投資${invDirection}了 ${invAmtText}，較期初 ${invPct >= 0 ? '+' : ''}${invPct}%`
   
   return { liquid: liqText, invest: invText }
 })
@@ -1578,7 +1582,7 @@ const trendChartOptions = computed(() => {
               if (isRoi) {
                 label += (context.parsed.y >= 0 ? '+' : '') + context.parsed.y.toFixed(2) + '%'
               } else {
-                label += context.parsed.y.toLocaleString('zh-TW', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) + ' 元'
+                label += isHidden.value ? '•••••• 元' : context.parsed.y.toLocaleString('zh-TW', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) + ' 元'
               }
             }
             return label
@@ -1595,6 +1599,9 @@ const trendChartOptions = computed(() => {
           callback: (value) => {
             if (isRoi) {
               return (value >= 0 ? '+' : '') + value.toFixed(1) + '%'
+            }
+            if (isHidden.value) {
+              return '***'
             }
             if (Math.abs(value) >= 1000000) {
               return (value / 1000000) + 'm'
@@ -3570,7 +3577,7 @@ onActivated(() => {
               <span class="item-type-badge">{{ translateTypeSettings(acc.type) }}</span>
             </div>
             <div class="item-right-wrap">
-              <span class="item-value">{{ formatCurrency(acc.balance) }}</span>
+              <span class="item-value">{{ isHidden ? '••••••' : formatCurrency(acc.balance) }}</span>
               <button class="delete-btn" @click.stop="deleteAccount(acc.id)" title="刪除">
                 <PhTrash size="16" />
               </button>
@@ -3587,10 +3594,10 @@ onActivated(() => {
           <div v-for="inv in investments" :key="inv.id" class="settings-table-item" @click="editInvestment(inv)">
             <div class="item-meta">
               <span class="item-name">{{ inv.symbol }} ({{ inv.name }})</span>
-              <span class="item-type-badge">{{ translateTypeSettings(inv.asset_class) }} · {{ inv.quantity }} 單位 @ {{ inv.currency }} {{ inv.buy_price }}</span>
+              <span class="item-type-badge">{{ translateTypeSettings(inv.asset_class) }} · {{ isHidden ? '••••••' : inv.quantity }} 單位 @ {{ inv.currency }} {{ isHidden ? '••••••' : inv.buy_price }}</span>
             </div>
             <div class="item-right-wrap">
-              <span class="item-value">{{ formatCurrency(inv.quantity * inv.current_price) }}</span>
+              <span class="item-value">{{ isHidden ? '••••••' : formatCurrency(inv.quantity * inv.current_price) }}</span>
               <button class="delete-btn" @click.stop="deleteInvestment(inv.id)" title="刪除">
                 <PhTrash size="16" />
               </button>
