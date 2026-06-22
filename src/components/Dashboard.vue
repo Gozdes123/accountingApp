@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, onActivated, computed } from 'vue'
+import { ref, onMounted, onActivated, onUnmounted, computed } from 'vue'
 import { supabase } from '../lib/supabaseClient'
 import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement, Title, Filler, BarElement } from 'chart.js'
 import { Doughnut, Line, Bar } from 'vue-chartjs'
@@ -257,6 +257,9 @@ const usdTwdRate = ref(32)
 const isInitialDataLoaded = ref(false)
 const isHidden = ref(true)
 const isRefreshing = ref(false)
+const isSyncingData = ref(false)
+const verifyingSymbol = ref(false)
+const verificationResult = ref(null)
 
 // 複數自動記帳狀態
 const newAssetAutoRecords = ref([])
@@ -378,6 +381,7 @@ const editAccount = (acc) => {
     newAssetAutoRecords.value = []
   }
   
+  verificationResult.value = null
   newAsset.value = {
     category: getCategoryFromType(acc.type),
     type: acc.type,
@@ -398,6 +402,7 @@ const editAccount = (acc) => {
 const editInvestment = (inv) => {
   isEditing.value = true
   editingId.value = inv.id
+  verificationResult.value = null
   
   newAsset.value = {
     category: 'invest',
@@ -1085,13 +1090,16 @@ const investListItems = computed(() => {
     } else {
       g.items.forEach(item => {
         const itemPct = totalInvestments.value > 0 ? (item.valueTwd / totalInvestments.value) * 100 : 0
+        const formattedQty = Number(Number(item.qty || 0).toFixed(4))
         result.push({
           isGroup: false,
           name: item.name,
           symbol: item.symbol,
           percentage: itemPct,
           valueTwd: item.valueTwd,
-          desc: `持有 ${item.qty}, ${item.currency} ${item.current_price}`,
+          formattedQty,
+          currency: item.currency || 'TWD',
+          current_price: item.current_price || 0,
           price_updated_at: item.price_updated_at,
           pnl: item.pnl,
           pnlPct: item.pnlPct,
@@ -1693,6 +1701,8 @@ const mergeExclusionSettings = () => {
 }
 
 const fetchAllData = async () => {
+  if (isSyncingData.value) return
+  isSyncingData.value = true
   // 1. 快取優先渲染 (SWR) — 如果本機有舊資料，直接先呈現在畫面上，達成秒開效果
   const cachedAccs = localStorage.getItem('local_accounts')
   const cachedInvs = localStorage.getItem('local_investments')
@@ -1785,6 +1795,7 @@ const fetchAllData = async () => {
 
   // 6. Sync groups list
   syncGroups()
+  isSyncingData.value = false
 }
 
 const saveDailySnapshot = async (amount) => {
@@ -1890,6 +1901,61 @@ const fetchYahooPrice = async (symbol) => {
     return data?.chart?.result?.[0]?.meta?.regularMarketPrice ?? null
   } catch {
     return null
+  }
+}
+
+const validateSymbol = async () => {
+  const sym = newAsset.value.symbol ? newAsset.value.symbol.trim().toUpperCase() : ''
+  if (!sym) {
+    verificationResult.value = null
+    return
+  }
+  
+  verifyingSymbol.value = true
+  verificationResult.value = { loading: true }
+  
+  const querySym = getYahooSymbol(sym, newAsset.value.type)
+  try {
+    const isProd = import.meta.env.PROD
+    const yhUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${querySym}?interval=1d&range=1d`
+    const url = isProd 
+      ? `https://api.allorigins.win/raw?url=${encodeURIComponent(yhUrl)}` 
+      : `/yahoo-finance/v8/finance/chart/${querySym}?interval=1d&range=1d`
+      
+    const res = await fetch(url)
+    if (!res.ok) {
+      verificationResult.value = { success: false, msg: '查無此標的，請檢查代號' }
+      verifyingSymbol.value = false
+      return
+    }
+    const data = await res.json()
+    const meta = data?.chart?.result?.[0]?.meta
+    const price = meta?.regularMarketPrice
+    
+    if (price !== undefined && price !== null) {
+      const cur = meta?.currency || (isTaiwanStock(sym) ? 'TWD' : 'USD')
+      verificationResult.value = {
+        success: true,
+        price,
+        currency: cur,
+        symbol: sym
+      }
+      
+      // Auto fill name if empty
+      if (!newAsset.value.name) {
+        newAsset.value.name = sym
+      }
+      // Auto fill buy price as current market price if empty or 0
+      if (!newAsset.value.buy_price || Number(newAsset.value.buy_price) === 0) {
+        newAsset.value.buy_price = price
+      }
+    } else {
+      verificationResult.value = { success: false, msg: '無法取得價格，可手動輸入' }
+    }
+  } catch (err) {
+    verificationResult.value = { success: false, msg: '驗證失敗，可直接手動輸入' }
+  } finally {
+    verifyingSymbol.value = false
   }
 }
 
@@ -2539,6 +2605,7 @@ const selectProvider = (item) => {
   newAsset.value.remarks = ''
   newAsset.value.auto_record = null
   newAssetAutoRecords.value = []
+  verificationResult.value = null
 
   addModalStep.value = 2
 }
@@ -2947,12 +3014,36 @@ const clearNetWorthHistory = () => {
 }
 
 
+let focusListener = null
+let visibilityListener = null
+
 onMounted(() => {
   fetchAllData()
+  
+  focusListener = () => {
+    fetchAllData()
+  }
+  window.addEventListener('focus', focusListener)
+  
+  visibilityListener = () => {
+    if (document.visibilityState === 'visible') {
+      fetchAllData()
+    }
+  }
+  window.addEventListener('visibilitychange', visibilityListener)
 })
 
 onActivated(() => {
   fetchAllData()
+})
+
+onUnmounted(() => {
+  if (focusListener) {
+    window.removeEventListener('focus', focusListener)
+  }
+  if (visibilityListener) {
+    window.removeEventListener('visibilitychange', visibilityListener)
+  }
 })
 </script>
 
@@ -3031,6 +3122,10 @@ onActivated(() => {
           <div class="balance-row">
             <span class="balance-amount">{{ isHidden ? '••••••' : formatCurrency(netWorth).replace('$', '') }}</span>
             <div style="display: flex; gap: 10px; align-items: center;">
+              <!-- Manual database sync button -->
+              <button class="nav-back-circle" @click="fetchAllData" :disabled="isSyncingData" title="手動同步" style="background: rgba(0,0,0,0.03); color: var(--color-text); width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; border: none; cursor: pointer; border-radius: 50%;">
+                <PhArrowClockwise size="20" :class="{ spin: isSyncingData }" weight="bold" />
+              </button>
               <!-- Circle button with > caret to switch to tree view -->
               <button class="nav-back-circle" @click="isTreeView = true" title="查看資產分配比" style="background: rgba(0,0,0,0.03); color: var(--color-text); width: 36px; height: 36px;">
                 <PhCaretRight size="20" weight="bold" />
@@ -3148,29 +3243,43 @@ onActivated(() => {
                   <div class="group-body">
                     <div v-if="investListItems.length > 0" class="group-card-expanded-list" style="display: flex; flex-direction: column; gap: 4px; padding-bottom: 8px;">
                       <div v-for="item in investListItems" :key="item.isGroup ? 'g-' + item.name : 'i-' + item.symbol" class="sub-item-card" @click.stop="item.isGroup ? openCustomGroupDetail(item.name, 'invest') : openInvestmentDetail(item.symbol)" style="cursor: pointer;">
-                        <!-- Circular Percentage Badge (showing percentage of total investments) -->
+                        <!-- Circular Percentage Badge -->
                         <div class="sub-item-badge" style="background: rgba(92, 103, 245, 0.1); color: #5c67f5; font-weight: 800;">
                           {{ Math.round(item.percentage) }}%
                         </div>
                         
-                        <!-- Details -->
-                        <div class="sub-item-info">
-                          <div class="sub-item-name">{{ item.name }}</div>
-                          <div class="sub-item-desc" style="display: flex; align-items: center; flex-wrap: wrap;">
-                            <span>{{ item.desc }}</span>
-                            <!-- Individual/Group ROI Badge -->
-                            <span v-if="item.pnlPct !== undefined" :style="{ color: item.pnl >= 0 ? '#2ebd59' : '#ff453a', fontWeight: 'bold', marginLeft: '6px' }">
-                              {{ item.pnl >= 0 ? '+' : '' }}{{ item.pnlPct.toFixed(2) }}%
-                            </span>
+                        <!-- Details (Left) -->
+                        <div class="sub-item-info" style="display: flex; flex-direction: column; gap: 4px; justify-content: center; flex: 1; min-width: 0; text-align: left;">
+                          <div class="sub-item-name" style="font-weight: 700; font-size: 1rem; color: var(--color-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{ item.name }}</div>
+                          <div class="sub-item-desc" style="font-size: 0.8rem; color: var(--color-text-muted); display: flex; align-items: center; gap: 4px; flex-wrap: wrap;">
+                            <template v-if="item.isGroup">
+                              <span>{{ item.desc }}</span>
+                            </template>
+                            <template v-else>
+                              <span>{{ isHidden ? '••••' : item.formattedQty }} 股</span>
+                              <span style="opacity: 0.5;">·</span>
+                              <span>{{ item.currency }} {{ isHidden ? '••••' : item.current_price }}</span>
+                            </template>
+                            <span v-if="item.price_updated_at" style="opacity: 0.5; margin-left: 2px; font-size: 0.7rem;">({{ formatDate(item.price_updated_at) }})</span>
                           </div>
                         </div>
 
-                        <!-- Value & Date -->
-                        <div class="sub-item-right">
-                          <div class="sub-item-val">
+                        <!-- Details (Right) -->
+                        <div class="sub-item-right" style="display: flex; flex-direction: column; align-items: flex-end; gap: 4px; justify-content: center; flex-shrink: 0; text-align: right;">
+                          <div class="sub-item-val" style="font-weight: 700; font-size: 0.95rem; color: var(--color-text); margin-bottom: 0;">
                             {{ isHidden ? '••••••' : formatCurrency(item.valueTwd).replace('$', '') }}
                           </div>
-                          <div class="sub-item-date">{{ item.isGroup ? '群組' : formatDate(item.price_updated_at) }}</div>
+                          <!-- ROI Capsule Badge -->
+                          <div v-if="item.pnlPct !== undefined" :style="{
+                            color: item.pnl >= 0 ? '#2ebd59' : '#ff453a',
+                            background: item.pnl >= 0 ? 'rgba(46, 189, 89, 0.1)' : 'rgba(255, 69, 58, 0.1)',
+                            padding: '2px 8px',
+                            borderRadius: '8px',
+                            fontSize: '0.78rem',
+                            fontWeight: '700'
+                          }">
+                            {{ item.pnl >= 0 ? '+' : '' }}{{ item.pnlPct.toFixed(2) }}%
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -3947,7 +4056,25 @@ onActivated(() => {
                   <span class="row-label">股票代號</span>
                   <PhInfo size="14" style="color: var(--color-text-muted); opacity: 0.8;" />
                 </div>
-                <input v-model="newAsset.symbol" :placeholder="newAsset.type === 'Stock' ? 'TSLA 或 0050' : 'BTC'" class="input-flat-right text-right" style="text-transform: uppercase; font-weight: 700; width: 120px;" />
+                <div class="row-value-wrapper" style="display: flex; align-items: center; gap: 8px;">
+                  <input v-model="newAsset.symbol" :placeholder="newAsset.type === 'Stock' ? 'TSLA 或 0050' : 'BTC'" class="input-flat-right text-right" style="text-transform: uppercase; font-weight: 700; width: 120px;" @blur="validateSymbol" />
+                </div>
+              </div>
+
+              <!-- 驗證狀態列 -->
+              <div v-if="verificationResult" style="padding: 10px 18px; border-bottom: 1px solid rgba(255, 255, 255, 0.05); background: rgba(0,0,0,0.01); display: flex; align-items: center; font-size: 0.8rem; min-height: 32px;">
+                <div v-if="verificationResult.loading" style="display: flex; align-items: center; gap: 6px; color: var(--color-text-muted);">
+                  <PhArrowClockwise size="14" class="spin" />
+                  <span>正在向 Yahoo Finance 驗證並取得最新股價...</span>
+                </div>
+                <div v-else-if="verificationResult.success" style="display: flex; align-items: center; gap: 6px; color: #2ebd59; font-weight: 700;">
+                  <PhCheckCircle size="14" />
+                  <span>驗證成功：{{ verificationResult.symbol }} · 市價 TWD {{ (verificationResult.currency === 'USD' ? (verificationResult.price * usdTwdRate).toFixed(2) : verificationResult.price.toFixed(2)) }} ({{ verificationResult.currency }} {{ verificationResult.price }})</span>
+                </div>
+                <div v-else style="display: flex; align-items: center; gap: 6px; color: #ff453a; font-weight: 700;">
+                  <PhInfo size="14" />
+                  <span>{{ verificationResult.msg }}</span>
+                </div>
               </div>
 
               <!-- 股數 -->
