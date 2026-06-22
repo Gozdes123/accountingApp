@@ -58,8 +58,15 @@ const statsChartData = computed(() => {
       return sum + (currency === 'USD' ? raw * usdTwdRate.value : raw)
     }, 0)
     
-    const currentInvestVal = totalInvestments.value
-    const accountChangeData = [0, 0, 0, 0, 0, currentInvestVal > 0 ? 10730 : 0]
+    const totalInvestmentsCost = investments.value.reduce((sum, item) => {
+      const qty = Number(item.quantity || 0)
+      const cost = Number(item.buy_price || item.average_cost || 0)
+      const raw = qty * cost
+      const currency = item.currency || 'TWD'
+      return sum + (currency === 'USD' ? raw * usdTwdRate.value : raw)
+    }, 0)
+    
+    const accountChangeData = [0, 0, 0, 0, 0, totalInvestmentsCost]
     const pnlData = [0, 0, 0, 0, 0, totalPnL]
     
     return {
@@ -149,8 +156,14 @@ const statsSummaryText = computed(() => {
       const currency = item.currency || 'TWD'
       return sum + (currency === 'USD' ? raw * usdTwdRate.value : raw)
     }, 0)
-    const currentInvestVal = totalInvestments.value
-    const accountChange = currentInvestVal > 0 ? 10730 : 0
+    const totalInvestmentsCost = investments.value.reduce((sum, item) => {
+      const qty = Number(item.quantity || 0)
+      const cost = Number(item.buy_price || item.average_cost || 0)
+      const raw = qty * cost
+      const currency = item.currency || 'TWD'
+      return sum + (currency === 'USD' ? raw * usdTwdRate.value : raw)
+    }, 0)
+    const accountChange = totalInvestmentsCost
     
     return {
       title: '2026年1月至6月',
