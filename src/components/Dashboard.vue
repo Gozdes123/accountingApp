@@ -3932,30 +3932,32 @@ onActivated(() => {
                 <input v-model="newAsset.symbol" :placeholder="newAsset.type === 'Stock' ? 'TSLA 或 0050' : 'BTC'" class="input-flat-right text-right" style="text-transform: uppercase; font-weight: 700; width: 120px;" />
               </div>
 
-              <!-- 股數 (With Stacked Subtext) -->
-              <div class="form-item-row-stacked" style="padding: 14px 18px; border-bottom: 1px solid rgba(255, 255, 255, 0.05); display: flex; flex-direction: column;">
-                <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
-                  <span class="row-label">股數</span>
-                  <div class="row-value-wrapper" style="display: flex; align-items: center; gap: 8px;">
-                    <input v-model.number="newAsset.quantity" type="number" step="0.0001" placeholder="0" class="input-flat-right text-right" style="font-weight: 700; font-size: 1.15rem; width: 120px;" />
-                    <span class="currency-badge" style="background: rgba(255,255,255,0.08); padding: 4px 8px; border-radius: 6px; font-size: 0.75rem; font-weight: 700;">{{ isTaiwanStock(newAsset.symbol) ? 'TWD' : 'USD' }}</span>
-                  </div>
+              <!-- 股數 -->
+              <div class="form-item-row" style="padding: 14px 18px; border-bottom: 1px solid rgba(255, 255, 255, 0.05); display: flex; justify-content: space-between; align-items: center;">
+                <span class="row-label">股數</span>
+                <div class="row-value-wrapper" style="display: flex; align-items: center; gap: 8px;">
+                  <input v-model.number="newAsset.quantity" type="number" step="0.0001" placeholder="0" class="input-flat-right text-right" style="font-weight: 700; font-size: 1.15rem; width: 120px;" />
+                  <span class="currency-badge" style="background: rgba(255,255,255,0.08); padding: 4px 8px; border-radius: 6px; font-size: 0.75rem; font-weight: 700; color: var(--color-text-muted);">股</span>
                 </div>
-                <!-- Subtext Row -->
-                <div style="display: flex; justify-content: space-between; align-items: center; width: 100%; margin-top: 8px; font-size: 0.8rem; color: var(--color-text-muted);">
-                  <!-- Left side: Edit buy price inline -->
-                  <div style="display: flex; align-items: center; gap: 4px;">
-                    <span>單價:</span>
-                    <span style="color: var(--color-text); font-weight: 600; display: flex; align-items: center; gap: 2px;">
-                      {{ isTaiwanStock(newAsset.symbol) ? 'TWD' : 'USD' }}
-                      <input v-model.number="newAsset.buy_price" type="number" step="0.01" class="input-flat-right text-right" style="width: 70px; background: transparent; border: none; border-bottom: 1px dashed var(--color-text-muted); color: var(--color-text); padding: 0 4px; font-weight: 700; font-size: 0.8rem; margin: 0;" />
-                    </span>
-                  </div>
-                  <!-- Right side: computed total value -->
-                  <span style="font-weight: 600; color: rgba(255,255,255,0.5);">
-                    = {{ isTaiwanStock(newAsset.symbol) ? 'TWD' : 'USD' }} {{ formatInvestNumber(Number(newAsset.quantity || 0) * Number(newAsset.buy_price || 0)) }}
+              </div>
+
+              <!-- 買入單價 -->
+              <div class="form-item-row" style="padding: 14px 18px; border-bottom: 1px solid rgba(255, 255, 255, 0.05); display: flex; justify-content: space-between; align-items: center;">
+                <span class="row-label">買入單價</span>
+                <div class="row-value-wrapper" style="display: flex; align-items: center; gap: 8px;">
+                  <input v-model.number="newAsset.buy_price" type="number" step="0.01" placeholder="0.00" class="input-flat-right text-right" style="font-weight: 700; font-size: 1.15rem; width: 120px;" />
+                  <span class="currency-badge" style="background: rgba(92, 103, 245, 0.1); color: #5c67f5; padding: 4px 8px; border-radius: 6px; font-size: 0.75rem; font-weight: 700;">
+                    {{ isTaiwanStock(newAsset.symbol) ? 'TWD' : 'USD' }}
                   </span>
                 </div>
+              </div>
+
+              <!-- 預估總成本 -->
+              <div class="form-item-row" style="padding: 14px 18px; border-bottom: 1px solid rgba(255, 255, 255, 0.05); display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.01);">
+                <span class="row-label" style="font-size: 0.85rem; color: var(--color-text-muted);">預估總成本</span>
+                <span style="font-size: 1rem; font-weight: 700; color: var(--color-text-muted);">
+                  {{ isTaiwanStock(newAsset.symbol) ? 'TWD' : 'USD' }} {{ formatInvestNumber(Number(newAsset.quantity || 0) * Number(newAsset.buy_price || 0)) }}
+                </span>
               </div>
 
               <!-- 自定名稱 -->
