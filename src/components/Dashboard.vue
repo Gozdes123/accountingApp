@@ -434,6 +434,14 @@ const handleTagInput = (e) => {
   }
 }
 
+const isLiabilityAccount = (accountId) => {
+  if (!accountId) return false
+  const acc = accounts.value.find(a => a.id === accountId)
+  if (!acc) return false
+  const liabTypes = ['Credit Card', 'Liability', 'Loan', 'Payable', 'OtherLiab']
+  return liabTypes.includes(acc.type)
+}
+
 const subListType = ref(null)
 const toastMessage = ref('')
 const showToast = (msg) => {
@@ -457,6 +465,7 @@ const openAddAutoRecord = () => {
     expiry_date: new Date(new Date().setMonth(new Date().getMonth() + 12)).toISOString().split('T')[0],
     last_processed_date: null,
     target_account_id: null,
+    interest_rate: '',
     created_at: new Date().toISOString()
   }
   activeAutoRecordIndex.value = null
@@ -2648,14 +2657,27 @@ const processAutoRecords = async () => {
               // 如果轉入的目標帳戶是負債類（如：房貸、信貸、信用卡），轉帳代表還款，應減少負債餘額
               const liabTypes = ['Credit Card', 'Liability', 'Loan', 'Payable', 'OtherLiab']
               if (liabTypes.includes(targetAcc.type)) {
-                targetAcc.balance -= amount
-                if (targetAcc.balance < 0) targetAcc.balance = 0
+                // 如果設定了年利率，先算利息支出，剩下的才是還本金
+                if (ar.interest_rate && Number(ar.interest_rate) > 0) {
+                  const rate = Number(ar.interest_rate)
+                  const monthlyInterest = Math.round(targetAcc.balance * (rate / 100) / 12)
+                  const principalPaid = Math.max(0, amount - monthlyInterest)
+                  
+                  targetAcc.balance -= principalPaid
+                  if (targetAcc.balance < 0) targetAcc.balance = 0
+                  
+                  showToast(`自動還款：${acc.name} ➡️ ${targetAcc.name} (本金 -${principalPaid}, 利息 -${monthlyInterest})`)
+                } else {
+                  targetAcc.balance -= amount
+                  if (targetAcc.balance < 0) targetAcc.balance = 0
+                  showToast(`自動轉帳：從 ${acc.name} 轉帳至 ${targetAcc.name} TWD ${amount}`)
+                }
               } else {
                 targetAcc.balance += amount
+                showToast(`自動轉帳：從 ${acc.name} 轉帳至 ${targetAcc.name} TWD ${amount}`)
               }
               
               targetAcc._dirty = true
-              showToast(`自動轉帳：從 ${acc.name} 轉帳至 ${targetAcc.name} TWD ${amount}`)
             } else {
               console.warn(`Target account ${ar.target_account_id} not found for transfer`)
             }
@@ -4088,7 +4110,7 @@ onActivated(() => {
                       </span>
                       <!-- Transfer details -->
                       <span style="font-size: 0.72rem; font-weight: normal; color: var(--color-text-muted);" v-if="ar.type === 'transfer'">
-                        (至: {{ accounts.find(a => a.id === ar.target_account_id)?.name || '未知' }})
+                        (至: {{ accounts.find(a => a.id === ar.target_account_id)?.name || '未知' }}{{ ar.interest_rate ? ` · 利率 ${ar.interest_rate}%` : '' }})
                       </span>
                     </div>
                     <!-- Date -->
@@ -4207,7 +4229,7 @@ onActivated(() => {
             </div>
 
             <!-- Target Account (Only for Transfer type) -->
-            <div v-if="activeAutoRecord.type === 'transfer'" class="form-item-row" style="position: relative; border-bottom: none;">
+            <div v-if="activeAutoRecord.type === 'transfer'" class="form-item-row" style="position: relative;">
               <span class="row-label">轉入目標帳戶</span>
               <div class="row-value-wrapper">
                 <span class="display-val" style="color: var(--color-text); font-size: 0.95rem; font-weight: 700;">
@@ -4225,6 +4247,17 @@ onActivated(() => {
                   {{ acc.name }} ({{ translateTypeSettings(acc.type) }})
                 </option>
               </select>
+            </div>
+
+            <!-- Interest rate input for Transfer to Liability target -->
+            <div v-if="activeAutoRecord.type === 'transfer' && isLiabilityAccount(activeAutoRecord.target_account_id)" class="form-item-row">
+              <div class="row-label-group">
+                <span class="row-label">年利率 (%)</span>
+                <span class="row-sublabel">若輸入將自動計算利息與本金</span>
+              </div>
+              <div class="row-value-wrapper">
+                <input v-model.number="activeAutoRecord.interest_rate" type="number" step="0.001" placeholder="例如 1.775 (選填)" class="input-flat-right" />
+              </div>
             </div>
 
             <div class="form-item-row" style="border-bottom: none;">
