@@ -916,11 +916,20 @@ const groupedInvestments = computed(() => {
         currency: inv.currency || 'TWD',
         current_price: Number(inv.current_price || 0),
         qty: 0,
+        costTwd: 0,
         price_updated_at: inv.price_updated_at,
         custom_group: inv.custom_group || ''
       }
     }
-    groups[sym].qty += Number(inv.quantity || 0)
+    const qty = Number(inv.quantity || 0)
+    groups[sym].qty += qty
+    
+    // 計算該筆投資的台幣成本
+    const buyPrice = Number(inv.buy_price || inv.average_cost || 0)
+    const lotCost = qty * buyPrice
+    const lotCostTwd = (inv.currency || 'TWD') === 'USD' ? lotCost * usdTwdRate.value : lotCost
+    groups[sym].costTwd += lotCostTwd
+    
     if (inv.price_updated_at && (!groups[sym].price_updated_at || inv.price_updated_at > groups[sym].price_updated_at)) {
       groups[sym].price_updated_at = inv.price_updated_at
       groups[sym].current_price = Number(inv.current_price || 0)
@@ -931,12 +940,36 @@ const groupedInvestments = computed(() => {
     const rawVal = g.qty * g.current_price
     const valTwd = g.currency === 'USD' ? rawVal * usdTwdRate.value : rawVal
     const pct = totalInvestments.value > 0 ? (valTwd / totalInvestments.value) * 100 : 0
+    const pnl = valTwd - g.costTwd
+    const pnlPct = g.costTwd > 0 ? (pnl / g.costTwd) * 100 : 0
     return {
       ...g,
       valueTwd: valTwd,
-      percentage: pct
+      percentage: pct,
+      pnl,
+      pnlPct
     }
   }).sort((a, b) => b.valueTwd - a.valueTwd)
+})
+
+// 計算投資部位總成本與投報率
+const totalInvestmentCostTwd = computed(() => {
+  return investments.value.reduce((sum, item) => {
+    if (item.include_in_chart === false) return sum
+    const qty = Number(item.quantity || 0)
+    const cost = Number(item.buy_price || item.average_cost || 0)
+    const raw = qty * cost
+    const currency = item.currency || (item.asset_class === 'us_stock' ? 'USD' : 'TWD')
+    return sum + (currency === 'USD' ? raw * usdTwdRate.value : raw)
+  }, 0)
+})
+
+const totalInvestmentPnL = computed(() => {
+  return totalInvestments.value - totalInvestmentCostTwd.value
+})
+
+const totalInvestmentPnLPct = computed(() => {
+  return totalInvestmentCostTwd.value > 0 ? (totalInvestmentPnL.value / totalInvestmentCostTwd.value) * 100 : 0
 })
 
 // 提取目前所有已建立的群組
@@ -1025,6 +1058,9 @@ const investListItems = computed(() => {
   const result = []
   groupedInvestmentsByCustomGroup.value.forEach(g => {
     if (!g.isUnclassified && g.name !== '未分類') {
+      const groupPnl = g.items.reduce((sum, i) => sum + (i.pnl || 0), 0)
+      const groupCost = g.items.reduce((sum, i) => sum + (i.costTwd || 0), 0)
+      const groupPnlPct = groupCost > 0 ? (groupPnl / groupCost) * 100 : 0
       result.push({
         isGroup: true,
         name: g.name,
@@ -1032,7 +1068,9 @@ const investListItems = computed(() => {
         valueTwd: g.totalValueTwd,
         items: g.items,
         desc: g.items.map(i => i.name || i.symbol).join('、'),
-        price_updated_at: g.items[0]?.price_updated_at
+        price_updated_at: g.items[0]?.price_updated_at,
+        pnl: groupPnl,
+        pnlPct: groupPnlPct
       })
     } else {
       g.items.forEach(item => {
@@ -1045,6 +1083,8 @@ const investListItems = computed(() => {
           valueTwd: item.valueTwd,
           desc: `持有 ${item.qty}, ${item.currency} ${item.current_price}`,
           price_updated_at: item.price_updated_at,
+          pnl: item.pnl,
+          pnlPct: item.pnlPct,
           rawItem: item
         })
       })
@@ -1071,6 +1111,17 @@ const activeGroupItems = computed(() => {
       }
     }).sort((a, b) => b.balance - a.balance)
   }
+})
+
+const activeCustomGroupPnL = computed(() => {
+  if (!activeCustomGroup.value || activeCustomGroupCategory.value !== 'invest') return 0
+  return activeGroupItems.value.reduce((sum, item) => sum + (item.pnl || 0), 0)
+})
+
+const activeCustomGroupPnLPct = computed(() => {
+  if (!activeCustomGroup.value || activeCustomGroupCategory.value !== 'invest') return 0
+  const cost = activeGroupItems.value.reduce((sum, item) => sum + (item.costTwd || 0), 0)
+  return cost > 0 ? (activeCustomGroupPnL.value / cost) * 100 : 0
 })
 
 const openCustomGroupDetail = (groupName, category) => {
@@ -1218,9 +1269,8 @@ const trendDatasets = computed(() => {
   const liabRatio = totalAssets > 0 ? todayLiabilities / totalAssets : 0
   const nwRatio = totalAssets > 0 ? todayNetWorth / totalAssets : 1
   
-  const totalPos = todayLiquid + todayInvest
-  const liquidRatio = totalPos > 0 ? todayLiquid / totalPos : 0.5
-  const investRatio = totalPos > 0 ? todayInvest / totalPos : 0.5
+  const liquidRatio = totalAssets > 0 ? todayLiquid / totalAssets : 0.5
+  const investRatio = totalAssets > 0 ? todayInvest / totalAssets : 0.5
   
   return history.map((r, idx) => {
     // 預估歷史節點數值，最後一個節點強制符合當前真實數據
@@ -1300,6 +1350,38 @@ const liquidInvestSummaryText = computed(() => {
   return { liquid: liqText, invest: invText }
 })
 
+const trendPeriodROI = computed(() => {
+  const datasets = trendDatasets.value
+  if (datasets.length < 2) return 0
+  const first = datasets[0]
+  const last = datasets[datasets.length - 1]
+  
+  if (trendType.value === 'net_worth') {
+    const base = Math.abs(first.netWorth)
+    if (base === 0) return 0
+    return ((last.netWorth - first.netWorth) / base) * 100
+  } else {
+    const base = Math.abs(first.invest)
+    if (base === 0) return 0
+    return ((last.invest - first.invest) / base) * 100
+  }
+})
+
+const trendRoiSummaryText = computed(() => {
+  const datasets = trendDatasets.value
+  if (datasets.length < 2) return { invest: '投資報酬率無變動', nw: '淨資產增長率無變動' }
+  const first = datasets[0]
+  const last = datasets[datasets.length - 1]
+  
+  const investRoi = first.invest > 0 ? ((last.invest - first.invest) / first.invest) * 100 : 0
+  const nwRoi = first.netWorth > 0 ? ((last.netWorth - first.netWorth) / first.netWorth) * 100 : 0
+  
+  return {
+    invest: `投資累計報酬率：${investRoi >= 0 ? '+' : ''}${investRoi.toFixed(2)}%`,
+    nw: `淨資產累計增長率：${nwRoi >= 0 ? '+' : ''}${nwRoi.toFixed(2)}%`
+  }
+})
+
 const trendChartData = computed(() => {
   const datasets = trendDatasets.value
   const labels = datasets.map(r => {
@@ -1314,6 +1396,7 @@ const trendChartData = computed(() => {
       labels,
       datasets: [
         {
+          label: '我的淨資產',
           data: nwData,
           borderColor: '#5c67f5',
           tension: 0.35,
@@ -1323,6 +1406,7 @@ const trendChartData = computed(() => {
           pointHoverRadius: 5
         },
         {
+          label: '負債',
           data: liabData,
           borderColor: '#a0a0a5',
           borderDash: [5, 5],
@@ -1334,13 +1418,14 @@ const trendChartData = computed(() => {
         }
       ]
     }
-  } else {
+  } else if (trendType.value === 'liquid_invest') {
     const liquidData = datasets.map(r => r.liquid)
     const investData = datasets.map(r => r.invest)
     return {
       labels,
       datasets: [
         {
+          label: '流動資金',
           data: liquidData,
           borderColor: '#2ec173',
           tension: 0.35,
@@ -1350,8 +1435,43 @@ const trendChartData = computed(() => {
           pointHoverRadius: 5
         },
         {
+          label: '投資',
           data: investData,
           borderColor: '#7839ec',
+          tension: 0.35,
+          borderWidth: 2.5,
+          fill: false,
+          pointRadius: datasets.length > 20 ? 0 : 2,
+          pointHoverRadius: 5
+        }
+      ]
+    }
+  } else {
+    // ROI view: Plot Investment ROI % and Net Worth ROI %
+    const first = datasets[0]
+    const firstInvest = first.invest
+    const firstNetWorth = first.netWorth
+    
+    const investRoiData = datasets.map(r => firstInvest > 0 ? ((r.invest - firstInvest) / firstInvest) * 100 : 0)
+    const netWorthRoiData = datasets.map(r => firstNetWorth > 0 ? ((r.netWorth - firstNetWorth) / firstNetWorth) * 100 : 0)
+    
+    return {
+      labels,
+      datasets: [
+        {
+          label: '投資報酬率',
+          data: investRoiData,
+          borderColor: '#7839ec',
+          tension: 0.35,
+          borderWidth: 2.5,
+          fill: false,
+          pointRadius: datasets.length > 20 ? 0 : 2,
+          pointHoverRadius: 5
+        },
+        {
+          label: '淨資產增長率',
+          data: netWorthRoiData,
+          borderColor: '#5c67f5',
           tension: 0.35,
           borderWidth: 2.5,
           fill: false,
@@ -1363,45 +1483,67 @@ const trendChartData = computed(() => {
   }
 })
 
-const trendChartOptions = {
-  responsive: true,
-  maintainAspectRatio: false,
-  interaction: { mode: 'index', intersect: false },
-  plugins: {
-    legend: { display: false },
-    tooltip: {
-      backgroundColor: 'rgba(30, 30, 32, 0.95)',
-      titleColor: '#ffffff',
-      bodyColor: '#e0e0e5',
-      borderColor: 'rgba(255, 255, 255, 0.08)',
-      borderWidth: 1,
-      padding: 10,
-      cornerRadius: 8
-    }
-  },
-  scales: {
-    y: {
-      grid: { color: 'rgba(255, 255, 255, 0.05)' },
-      ticks: { 
-        color: 'rgba(255, 255, 255, 0.4)', 
-        font: { size: 10, family: 'Inter' },
-        callback: (value) => {
-          if (Math.abs(value) >= 1000000) {
-            return (value / 1000000) + 'm';
+const trendChartOptions = computed(() => {
+  const isRoi = trendType.value === 'roi'
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: { mode: 'index', intersect: false },
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        backgroundColor: 'rgba(30, 30, 32, 0.95)',
+        titleColor: '#ffffff',
+        bodyColor: '#e0e0e5',
+        borderColor: 'rgba(255, 255, 255, 0.08)',
+        borderWidth: 1,
+        padding: 10,
+        cornerRadius: 8,
+        callbacks: {
+          label: (context) => {
+            let label = context.dataset.label || ''
+            if (label) {
+              label += ': '
+            }
+            if (context.parsed.y !== null) {
+              if (isRoi) {
+                label += (context.parsed.y >= 0 ? '+' : '') + context.parsed.y.toFixed(2) + '%'
+              } else {
+                label += context.parsed.y.toLocaleString('zh-TW', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) + ' 元'
+              }
+            }
+            return label
           }
-          if (Math.abs(value) >= 1000) {
-            return (value / 1000) + 'k';
-          }
-          return value;
         }
       }
     },
-    x: {
-      grid: { display: false },
-      ticks: { color: 'rgba(255, 255, 255, 0.4)', font: { size: 10, family: 'Inter' }, maxTicksLimit: 8 }
+    scales: {
+      y: {
+        grid: { color: 'rgba(255, 255, 255, 0.05)' },
+        ticks: { 
+          color: 'rgba(255, 255, 255, 0.4)', 
+          font: { size: 10, family: 'Inter' },
+          callback: (value) => {
+            if (isRoi) {
+              return (value >= 0 ? '+' : '') + value.toFixed(1) + '%'
+            }
+            if (Math.abs(value) >= 1000000) {
+              return (value / 1000000) + 'm'
+            }
+            if (Math.abs(value) >= 1000) {
+              return (value / 1000) + 'k'
+            }
+            return value
+          }
+        }
+      },
+      x: {
+        grid: { display: false },
+        ticks: { color: 'rgba(255, 255, 255, 0.4)', font: { size: 10, family: 'Inter' }, maxTicksLimit: 8 }
+      }
     }
   }
-}
+})
 
 // 圓餅圖分配資料
 const doughnutChartData = computed(() => {
@@ -2844,7 +2986,13 @@ onActivated(() => {
               <div class="group-header-card" :class="{ 'expanded-header bg-invest': listExpanded.invest }" @click="toggleListExpand('invest')" style="cursor: pointer;">
                 <div class="card-header-main-row">
                   <span class="group-title-text" :class="{ 'text-dark': !listExpanded.invest, 'text-white': listExpanded.invest }">投資</span>
-                  <span class="group-value-text" :class="{ 'text-dark': !listExpanded.invest, 'text-white': listExpanded.invest }">{{ isHidden ? '••••••' : formatCurrency(totalInvestments).replace('$', '') }}</span>
+                  <div style="display: flex; flex-direction: column; align-items: flex-end;">
+                    <span class="group-value-text" :class="{ 'text-dark': !listExpanded.invest, 'text-white': listExpanded.invest }">{{ isHidden ? '••••••' : formatCurrency(totalInvestments).replace('$', '') }}</span>
+                    <!-- ROI badge for the entire portfolio -->
+                    <span v-if="!isHidden" style="font-size: 0.78rem; font-weight: 700; margin-top: 2px;" :style="{ color: listExpanded.invest ? '#ffffff' : (totalInvestmentPnL >= 0 ? '#2ebd59' : '#ff453a'), opacity: listExpanded.invest ? 0.9 : 1 }">
+                      {{ totalInvestmentPnL >= 0 ? '+' : '' }}{{ totalInvestmentPnL.toLocaleString('zh-TW', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) }} ({{ totalInvestmentPnLPct.toFixed(2) }}%)
+                    </span>
+                  </div>
                 </div>
                 <div class="card-header-sub-row" v-if="!listExpanded.invest">
                   <div class="card-subtitle-col">
@@ -2872,7 +3020,13 @@ onActivated(() => {
                         <!-- Details -->
                         <div class="sub-item-info">
                           <div class="sub-item-name">{{ item.name }}</div>
-                          <div class="sub-item-desc">{{ item.desc }}</div>
+                          <div class="sub-item-desc" style="display: flex; align-items: center; flex-wrap: wrap;">
+                            <span>{{ item.desc }}</span>
+                            <!-- Individual/Group ROI Badge -->
+                            <span v-if="item.pnlPct !== undefined" :style="{ color: item.pnl >= 0 ? '#2ebd59' : '#ff453a', fontWeight: 'bold', marginLeft: '6px' }">
+                              {{ item.pnl >= 0 ? '+' : '' }}{{ item.pnlPct.toFixed(2) }}%
+                            </span>
+                          </div>
                         </div>
 
                         <!-- Value & Date -->
@@ -3109,7 +3263,7 @@ onActivated(() => {
         </div>
 
         <!-- Segment Selector -->
-        <div style="display: flex; background: rgba(0, 0, 0, 0.04); padding: 4px; border-radius: 20px; margin-top: 18px; margin-bottom: 20px;">
+        <div style="display: flex; background: rgba(0, 0, 0, 0.04); padding: 4px; border-radius: 20px; margin-top: 18px; margin-bottom: 20px; gap: 2px;">
           <button 
             @click="trendType = 'net_worth'"
             :style="{
@@ -3117,7 +3271,7 @@ onActivated(() => {
               padding: '10px 0',
               borderRadius: '16px',
               border: 'none',
-              fontSize: '0.9rem',
+              fontSize: '0.85rem',
               fontWeight: '700',
               cursor: 'pointer',
               background: trendType === 'net_worth' ? '#ffffff' : 'transparent',
@@ -3134,7 +3288,7 @@ onActivated(() => {
               padding: '10px 0',
               borderRadius: '16px',
               border: 'none',
-              fontSize: '0.9rem',
+              fontSize: '0.85rem',
               fontWeight: '700',
               cursor: 'pointer',
               background: trendType === 'liquid_invest' ? '#ffffff' : 'transparent',
@@ -3144,6 +3298,23 @@ onActivated(() => {
           >
             流動資金與投資
           </button>
+          <button 
+            @click="trendType = 'roi'"
+            :style="{
+              flex: 1,
+              padding: '10px 0',
+              borderRadius: '16px',
+              border: 'none',
+              fontSize: '0.85rem',
+              fontWeight: '700',
+              cursor: 'pointer',
+              background: trendType === 'roi' ? '#ffffff' : 'transparent',
+              color: trendType === 'roi' ? 'var(--color-text)' : 'var(--color-text-muted)',
+              boxShadow: trendType === 'roi' ? '0 2px 4px rgba(0,0,0,0.05)' : 'none'
+            }"
+          >
+            投資報酬率
+          </button>
         </div>
       </div>
 
@@ -3151,8 +3322,22 @@ onActivated(() => {
       <div style="flex: 1; overflow-y: auto; padding: 0 16px; box-sizing: border-box; -webkit-overflow-scrolling: touch;">
         <!-- Date Range & Summary Info -->
         <div style="text-align: left; padding: 0 4px; margin-bottom: 24px;">
-          <div style="font-size: 0.85rem; color: var(--color-text-muted); font-weight: bold; margin-bottom: 10px;">
-            {{ trendDateRangeText }}
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; flex-wrap: wrap; gap: 8px;">
+            <div style="font-size: 0.85rem; color: var(--color-text-muted); font-weight: bold;">
+              {{ trendDateRangeText }}
+            </div>
+            <!-- ROI / Return Rate Badge -->
+            <div 
+              v-if="trendPeriodROI !== 0"
+              style="display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 12px; font-size: 0.78rem; font-weight: 700; cursor: default;"
+              :style="{
+                background: trendPeriodROI >= 0 ? 'rgba(46, 189, 89, 0.1)' : 'rgba(255, 69, 58, 0.1)',
+                color: trendPeriodROI >= 0 ? '#2ebd59' : '#ff453a'
+              }"
+            >
+              <span>{{ trendType === 'net_worth' ? '淨值增長率' : '投資報酬率' }}</span>
+              <span>{{ trendPeriodROI >= 0 ? '+' : '' }}{{ trendPeriodROI.toFixed(2) }}%</span>
+            </div>
           </div>
           <template v-if="trendType === 'net_worth'">
             <div style="font-size: 0.95rem; font-weight: 700; color: var(--color-text); line-height: 1.6;">
@@ -3162,12 +3347,20 @@ onActivated(() => {
               {{ netWorthSummaryText.liab }}
             </div>
           </template>
-          <template v-else>
+          <template v-else-if="trendType === 'liquid_invest'">
             <div style="font-size: 0.95rem; font-weight: 700; color: var(--color-text); line-height: 1.6;">
               {{ liquidInvestSummaryText.liquid }}
             </div>
             <div style="font-size: 0.95rem; font-weight: 700; color: var(--color-text); line-height: 1.6; margin-top: 4px;">
               {{ liquidInvestSummaryText.invest }}
+            </div>
+          </template>
+          <template v-else>
+            <div style="font-size: 0.95rem; font-weight: 700; color: var(--color-text); line-height: 1.6;">
+              {{ trendRoiSummaryText.invest }}
+            </div>
+            <div style="font-size: 0.95rem; font-weight: 700; color: var(--color-text); line-height: 1.6; margin-top: 4px;">
+              {{ trendRoiSummaryText.nw }}
             </div>
           </template>
         </div>
@@ -3185,7 +3378,7 @@ onActivated(() => {
               負債
             </div>
           </template>
-          <template v-else>
+          <template v-else-if="trendType === 'liquid_invest'">
             <div style="display: flex; align-items: center; gap: 6px; font-size: 0.82rem; font-weight: bold; color: var(--color-text);">
               <span style="display: inline-block; width: 12px; height: 12px; background: #2ec173; border-radius: 2px;"></span>
               流動資金
@@ -3193,6 +3386,16 @@ onActivated(() => {
             <div style="display: flex; align-items: center; gap: 6px; font-size: 0.82rem; font-weight: bold; color: var(--color-text);">
               <span style="display: inline-block; width: 12px; height: 12px; background: #7839ec; border-radius: 2px;"></span>
               投資
+            </div>
+          </template>
+          <template v-else>
+            <div style="display: flex; align-items: center; gap: 6px; font-size: 0.82rem; font-weight: bold; color: var(--color-text);">
+              <span style="display: inline-block; width: 12px; height: 12px; background: #7839ec; border-radius: 2px;"></span>
+              投資報酬率
+            </div>
+            <div style="display: flex; align-items: center; gap: 6px; font-size: 0.82rem; font-weight: bold; color: var(--color-text);">
+              <span style="display: inline-block; width: 12px; height: 12px; background: #5c67f5; border-radius: 2px;"></span>
+              淨資產增長率
             </div>
           </template>
         </div>
@@ -3615,9 +3818,9 @@ onActivated(() => {
                   <!-- Left side: Edit buy price inline -->
                   <div style="display: flex; align-items: center; gap: 4px;">
                     <span>單價:</span>
-                    <span style="color: white; font-weight: 600; display: flex; align-items: center; gap: 2px;">
+                    <span style="color: var(--color-text); font-weight: 600; display: flex; align-items: center; gap: 2px;">
                       {{ isTaiwanStock(newAsset.symbol) ? 'TWD' : 'USD' }}
-                      <input v-model.number="newAsset.buy_price" type="number" step="0.01" class="input-flat-right text-right" style="width: 70px; background: transparent; border: none; border-bottom: 1px dashed rgba(255,255,255,0.3); color: white; padding: 0 4px; font-weight: 700; font-size: 0.8rem; margin: 0;" />
+                      <input v-model.number="newAsset.buy_price" type="number" step="0.01" class="input-flat-right text-right" style="width: 70px; background: transparent; border: none; border-bottom: 1px dashed var(--color-text-muted); color: var(--color-text); padding: 0 4px; font-weight: 700; font-size: 0.8rem; margin: 0;" />
                     </span>
                   </div>
                   <!-- Right side: computed total value -->
@@ -3637,7 +3840,7 @@ onActivated(() => {
               <div class="form-item-row" style="position: relative;">
                 <span class="row-label">連結扣款帳戶</span>
                 <div class="row-value-wrapper">
-                  <span class="display-val" style="color: #ffffff; font-size: 0.95rem; font-weight: 700;">
+                  <span class="display-val" style="color: var(--color-text); font-size: 0.95rem; font-weight: 700;">
                     {{ accounts.find(a => a.id === newAsset.funding_account_id)?.name || '不連結扣款' }}
                   </span>
                   <PhCaretRight size="16" class="chevron-icon" />
@@ -4434,11 +4637,17 @@ onActivated(() => {
 
         <div class="modal-content-full" style="padding: 0 18px 40px 18px;">
           <!-- Group Sum Value -->
-          <div style="display: flex; justify-content: flex-end; align-items: center; margin-bottom: 20px; font-weight: 700; color: var(--color-text-muted); font-size: 0.95rem;">
-            <span>合計 TWD </span>
-            <span style="font-family: var(--font-display); font-size: 1.5rem; font-weight: 800; color: var(--color-text); margin-left: 8px;">
-              {{ isHidden ? '••••••' : formatCurrency(activeGroupItems.reduce((sum, item) => sum + (activeCustomGroupCategory === 'invest' ? item.valueTwd : item.balance), 0)).replace('$', '') }}
-            </span>
+          <div style="display: flex; flex-direction: column; align-items: flex-end; margin-bottom: 20px;">
+            <div style="display: flex; align-items: center; font-weight: 700; color: var(--color-text-muted); font-size: 0.95rem;">
+              <span>合計 TWD </span>
+              <span style="font-family: var(--font-display); font-size: 1.5rem; font-weight: 800; color: var(--color-text); margin-left: 8px;">
+                {{ isHidden ? '••••••' : formatCurrency(activeGroupItems.reduce((sum, item) => sum + (activeCustomGroupCategory === 'invest' ? item.valueTwd : item.balance), 0)).replace('$', '') }}
+              </span>
+            </div>
+            <!-- Group ROI Display -->
+            <div v-if="activeCustomGroupCategory === 'invest' && !isHidden" style="font-size: 0.85rem; font-weight: 700; margin-top: 4px;" :style="{ color: activeCustomGroupPnL >= 0 ? '#2ebd59' : '#ff453a' }">
+              群組績效：{{ activeCustomGroupPnL >= 0 ? '+' : '' }}{{ activeCustomGroupPnL.toLocaleString('zh-TW', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) }} ({{ activeCustomGroupPnLPct.toFixed(2) }}%)
+            </div>
           </div>
 
           <!-- Items list in this group -->
@@ -4459,8 +4668,12 @@ onActivated(() => {
                 <!-- Details -->
                 <div class="sub-item-info">
                   <div class="sub-item-name">{{ item.name }}</div>
-                  <div class="sub-item-desc">
-                    持有 {{ item.qty }}, {{ item.currency }} {{ item.current_price }}
+                  <div class="sub-item-desc" style="display: flex; align-items: center; flex-wrap: wrap;">
+                    <span>持有 {{ item.qty }}, {{ item.currency }} {{ item.current_price }}</span>
+                    <!-- Individual Stock ROI inside group -->
+                    <span v-if="item.pnlPct !== undefined" :style="{ color: item.pnl >= 0 ? '#2ebd59' : '#ff453a', fontWeight: 'bold', marginLeft: '6px' }">
+                      {{ item.pnl >= 0 ? '+' : '' }}{{ item.pnlPct.toFixed(2) }}%
+                    </span>
                   </div>
                 </div>
 
@@ -5662,6 +5875,11 @@ onActivated(() => {
 }
 
 .seg-btn.active-expense.active {
+  background: #3a59cc !important;
+  color: #ffffff !important;
+}
+
+.seg-btn.active-transfer.active {
   background: #3a59cc !important;
   color: #ffffff !important;
 }
