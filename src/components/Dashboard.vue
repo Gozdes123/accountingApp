@@ -1798,6 +1798,12 @@ const fetchAllData = async () => {
   isSyncingData.value = false
 }
 
+const handleSyncAll = async () => {
+  if (isSyncingData.value || isRefreshing.value) return
+  await fetchAllData()
+  await refreshPrices()
+}
+
 const saveDailySnapshot = async (amount) => {
   const d = new Date()
   const offset = d.getTimezoneOffset()
@@ -1891,14 +1897,39 @@ const fetchYahooPrice = async (symbol) => {
   try {
     const isProd = import.meta.env.PROD
     const yhUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=1d`
-    const url = isProd 
-      ? `https://api.allorigins.win/raw?url=${encodeURIComponent(yhUrl)}` 
-      : `/yahoo-finance/v8/finance/chart/${symbol}?interval=1d&range=1d`
-      
-    const res = await fetch(url)
-    if (!res.ok) return null
-    const data = await res.json()
-    return data?.chart?.result?.[0]?.meta?.regularMarketPrice ?? null
+    
+    if (!isProd) {
+      const res = await fetch(`/yahoo-finance/v8/finance/chart/${symbol}?interval=1d&range=1d`)
+      if (res.ok) {
+        const data = await res.json()
+        return data?.chart?.result?.[0]?.meta?.regularMarketPrice ?? null
+      }
+      return null
+    }
+
+    // Try corsproxy.io first
+    try {
+      const res = await fetch(`https://corsproxy.io/?${encodeURIComponent(yhUrl)}`)
+      if (res.ok) {
+        const data = await res.json()
+        return data?.chart?.result?.[0]?.meta?.regularMarketPrice ?? null
+      }
+    } catch (e) {
+      console.warn('corsproxy.io failed, falling back to allorigins...', e)
+    }
+
+    // Fallback: Try allorigins.win
+    try {
+      const res = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(yhUrl)}`)
+      if (res.ok) {
+        const data = await res.json()
+        return data?.chart?.result?.[0]?.meta?.regularMarketPrice ?? null
+      }
+    } catch (e) {
+      console.warn('allorigins fallback failed...', e)
+    }
+
+    return null
   } catch {
     return null
   }
@@ -3123,8 +3154,8 @@ onUnmounted(() => {
             <span class="balance-amount">{{ isHidden ? '••••••' : formatCurrency(netWorth).replace('$', '') }}</span>
             <div style="display: flex; gap: 10px; align-items: center;">
               <!-- Manual database sync button -->
-              <button class="nav-back-circle" @click="fetchAllData" :disabled="isSyncingData" title="手動同步" style="background: rgba(0,0,0,0.03); color: var(--color-text); width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; border: none; cursor: pointer; border-radius: 50%;">
-                <PhArrowClockwise size="20" :class="{ spin: isSyncingData }" weight="bold" />
+              <button class="nav-back-circle" @click="handleSyncAll" :disabled="isSyncingData || isRefreshing" title="手動同步" style="background: rgba(0,0,0,0.03); color: var(--color-text); width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; border: none; cursor: pointer; border-radius: 50%;">
+                <PhArrowClockwise size="20" :class="{ spin: isSyncingData || isRefreshing }" weight="bold" />
               </button>
               <!-- Circle button with > caret to switch to tree view -->
               <button class="nav-back-circle" @click="isTreeView = true" title="查看資產分配比" style="background: rgba(0,0,0,0.03); color: var(--color-text); width: 36px; height: 36px;">
@@ -3218,7 +3249,7 @@ onUnmounted(() => {
                 <div class="card-header-main-row">
                   <span class="group-title-text" :class="{ 'text-dark': !listExpanded.invest, 'text-white': listExpanded.invest }">投資</span>
                   <div style="display: flex; flex-direction: column; align-items: flex-end;">
-                    <span class="group-value-text" :class="{ 'text-dark': !listExpanded.invest, 'text-white': listExpanded.invest }">{{ isHidden ? '••••••' : formatCurrency(totalInvestments).replace('$', '') }}</span>
+                    <span class="group-value-text" :class="{ 'text-dark': !listExpanded.invest, 'text-white': listExpanded.invest }">{{ isHidden ? '••••••' : formatCurrency(Math.round(totalInvestments)).replace('$', '') }}</span>
                     <!-- ROI badge for the entire portfolio -->
                     <span v-if="!isHidden" style="font-size: 0.78rem; font-weight: 700; margin-top: 4px;" :style="listExpanded.invest ? {
                       color: '#ffffff',
@@ -3275,7 +3306,7 @@ onUnmounted(() => {
                         <!-- Details (Right) -->
                         <div class="sub-item-right" style="display: flex; flex-direction: column; align-items: flex-end; gap: 4px; justify-content: center; flex-shrink: 0; text-align: right;">
                           <div class="sub-item-val" style="font-weight: 700; font-size: 0.95rem; color: var(--color-text); margin-bottom: 0;">
-                            {{ isHidden ? '••••••' : formatCurrency(item.valueTwd).replace('$', '') }}
+                            {{ isHidden ? '••••••' : formatCurrency(Math.round(item.valueTwd)).replace('$', '') }}
                           </div>
                           <!-- ROI Capsule Badge -->
                           <div v-if="item.pnlPct !== undefined" :style="{
@@ -3701,10 +3732,6 @@ onUnmounted(() => {
     <div v-else-if="currentTab === 'settings'" key="settings" class="tab-view-content" style="gap: 1rem;">
       <div class="settings-header-row">
         <h3>管理所有原始帳目</h3>
-        <button class="icon-text-btn" @click="refreshPrices" :disabled="isRefreshing">
-          <PhArrowClockwise size="16" :class="{ spin: isRefreshing }" />
-          <span>{{ isRefreshing ? '更新中' : '更新最新股價' }}</span>
-        </button>
       </div>
 
       <!-- Accounts Table List -->
@@ -4935,7 +4962,7 @@ onUnmounted(() => {
             <div style="display: flex; align-items: center; font-weight: 700; color: var(--color-text-muted); font-size: 0.95rem;">
               <span>合計 TWD </span>
               <span style="font-family: var(--font-display); font-size: 1.5rem; font-weight: 800; color: var(--color-text); margin-left: 8px;">
-                {{ isHidden ? '••••••' : formatCurrency(activeGroupItems.reduce((sum, item) => sum + (activeCustomGroupCategory === 'invest' ? item.valueTwd : item.balance), 0)).replace('$', '') }}
+                {{ isHidden ? '••••••' : formatCurrency(Math.round(activeGroupItems.reduce((sum, item) => sum + (activeCustomGroupCategory === 'invest' ? item.valueTwd : item.balance), 0))).replace('$', '') }}
               </span>
             </div>
             <!-- Group ROI Display -->
@@ -4974,7 +5001,7 @@ onUnmounted(() => {
                 <!-- Value & Date -->
                 <div class="sub-item-right">
                   <div class="sub-item-val">
-                    {{ isHidden ? '••••••' : formatCurrency(item.valueTwd).replace('$', '') }}
+                    {{ isHidden ? '••••••' : formatCurrency(Math.round(item.valueTwd)).replace('$', '') }}
                   </div>
                   <div class="sub-item-date">{{ formatDate(item.price_updated_at) }}</div>
                 </div>

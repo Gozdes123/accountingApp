@@ -109,15 +109,38 @@ const fetchYahooPrice = async (symbol) => {
     const isProd = import.meta.env.PROD
     const yhUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=1d`
     
-    // Prod uses allorigins.win to bypass CORS for static sites
-    const url = isProd 
-      ? `https://api.allorigins.win/raw?url=${encodeURIComponent(yhUrl)}` 
-      : `/yahoo-finance/v8/finance/chart/${symbol}?interval=1d&range=1d`
-      
-    const res = await fetch(url)
-    if (!res.ok) return null
-    const data = await res.json()
-    return data?.chart?.result?.[0]?.meta?.regularMarketPrice ?? null
+    if (!isProd) {
+      const res = await fetch(`/yahoo-finance/v8/finance/chart/${symbol}?interval=1d&range=1d`)
+      if (res.ok) {
+        const data = await res.json()
+        return data?.chart?.result?.[0]?.meta?.regularMarketPrice ?? null
+      }
+      return null
+    }
+
+    // Try corsproxy.io first
+    try {
+      const res = await fetch(`https://corsproxy.io/?${encodeURIComponent(yhUrl)}`)
+      if (res.ok) {
+        const data = await res.json()
+        return data?.chart?.result?.[0]?.meta?.regularMarketPrice ?? null
+      }
+    } catch (e) {
+      console.warn('corsproxy.io failed, falling back to allorigins...', e)
+    }
+
+    // Fallback: Try allorigins.win
+    try {
+      const res = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(yhUrl)}`)
+      if (res.ok) {
+        const data = await res.json()
+        return data?.chart?.result?.[0]?.meta?.regularMarketPrice ?? null
+      }
+    } catch (e) {
+      console.warn('allorigins fallback failed...', e)
+    }
+
+    return null
   } catch {
     return null
   }
