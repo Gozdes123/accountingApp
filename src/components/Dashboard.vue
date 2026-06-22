@@ -105,7 +105,7 @@ const statsChartData = computed(() => {
             }
             if (ar.type === 'income') {
               monthlyIncome += Number(ar.amount || 0)
-            } else if (ar.type === 'expense') {
+            } else if (ar.type === 'expense' || ar.type === 'dca_invest') {
               monthlyExpense += Number(ar.amount || 0)
             }
           }
@@ -183,7 +183,7 @@ const statsSummaryText = computed(() => {
             }
             if (ar.type === 'income') {
               monthlyIncome += Number(ar.amount || 0)
-            } else if (ar.type === 'expense') {
+            } else if (ar.type === 'expense' || ar.type === 'dca_invest') {
               monthlyExpense += Number(ar.amount || 0)
             }
           }
@@ -471,6 +471,8 @@ const openAddAutoRecord = () => {
     last_processed_date: null,
     target_account_id: null,
     interest_rate: '',
+    symbol: '',
+    currency: 'TWD',
     created_at: new Date().toISOString()
   }
   activeAutoRecordIndex.value = null
@@ -500,6 +502,13 @@ const saveAutoRecordConfig = async () => {
   if (activeAutoRecord.value.type === 'transfer' && !activeAutoRecord.value.target_account_id) {
     saveError.value = '請選擇轉入目標帳戶'
     return
+  }
+  if (activeAutoRecord.value.type === 'dca_invest' && !activeAutoRecord.value.symbol) {
+    saveError.value = '請輸入股票代號'
+    return
+  }
+  if (activeAutoRecord.value.type === 'dca_invest') {
+    activeAutoRecord.value.symbol = activeAutoRecord.value.symbol.toUpperCase().trim()
   }
   
   if (activeAutoRecordIndex.value !== null) {
@@ -774,30 +783,7 @@ const submitModifyBalance = async () => {
     const oldQty = Number(firstLot.quantity || 0)
     const oldPrice = Number(firstLot.buy_price || firstLot.average_cost || 0)
     
-    // Adjust cash account if linked
-    if (firstLot.funding_account_id) {
-      const oldCost = oldQty * oldPrice
-      const oldCostTwd = firstLot.currency === 'USD' ? oldCost * usdTwdRate.value : oldCost
-      
-      const newCost = newQty * buyPrice
-      const newCostTwd = firstLot.currency === 'USD' ? newCost * usdTwdRate.value : newCost
-      
-      const diffTwd = newCostTwd - oldCostTwd
-      
-      accounts.value = accounts.value.map(acc => {
-        if (acc.id === firstLot.funding_account_id) {
-          acc.balance -= diffTwd
-          if (acc.balance < 0) acc.balance = 0
-          try {
-            supabase.from('accounts').update({ balance: acc.balance }).eq('id', acc.id)
-          } catch (dbErr) {
-            console.warn('Sync account balance after inline modification failed:', dbErr)
-          }
-        }
-        return acc
-      })
-      localStorage.setItem('local_accounts', JSON.stringify(accounts.value))
-    }
+    // No longer adjusting funding account balance to avoid double deduction
     
     firstLot.quantity = newQty
     firstLot.average_cost = buyPrice
@@ -2135,50 +2121,7 @@ const addAssetItem = async () => {
         include_in_chart: newAsset.value.include_in_chart !== false
       }
       
-      // Calculate cash funding account adjustment
-      const oldInv = isEditing.value ? investments.value.find(i => i.id === editingId.value) : null
-      const oldCost = oldInv ? (Number(oldInv.quantity || 0) * Number(oldInv.buy_price || oldInv.average_cost || 0)) : 0
-      const oldCostTwd = oldInv && oldInv.currency === 'USD' ? oldCost * usdTwdRate.value : oldCost
-      
-      const newCost = payload.quantity * payload.buy_price
-      const newCostTwd = payload.currency === 'USD' ? newCost * usdTwdRate.value : newCost
-      
-      const oldFundingId = oldInv ? oldInv.funding_account_id : null
-      const newFundingId = payload.funding_account_id
-      
       let accountsChanged = false
-      const updatedAccounts = [...accounts.value]
-      
-      if (oldFundingId === newFundingId) {
-        if (newFundingId) {
-          const acc = updatedAccounts.find(a => a.id === newFundingId)
-          if (acc) {
-            const diffTwd = newCostTwd - oldCostTwd
-            acc.balance -= diffTwd
-            if (acc.balance < 0) acc.balance = 0
-            acc._dirty = true
-            accountsChanged = true
-          }
-        }
-      } else {
-        if (oldFundingId) {
-          const oldAcc = updatedAccounts.find(a => a.id === oldFundingId)
-          if (oldAcc) {
-            oldAcc.balance += oldCostTwd
-            oldAcc._dirty = true
-            accountsChanged = true
-          }
-        }
-        if (newFundingId) {
-          const newAcc = updatedAccounts.find(a => a.id === newFundingId)
-          if (newAcc) {
-            newAcc.balance -= newCostTwd
-            if (newAcc.balance < 0) newAcc.balance = 0
-            newAcc._dirty = true
-            accountsChanged = true
-          }
-        }
-      }
       
       if (isEditing.value) {
         try {
@@ -2359,7 +2302,7 @@ const deleteAccount = async (id) => {
 }
 
 const deleteInvestment = async (id) => {
-  triggerDeleteConfirm('確定要刪除此投資項目？此動作將退回買入成本至連結的扣款帳戶。', async () => {
+  triggerDeleteConfirm('確定要刪除此投資項目嗎？', async () => {
     const inv = investments.value.find(i => i.id === id)
     
     if (id && !String(id).startsWith('local-') && !String(id).startsWith('mock-')) {
@@ -2369,27 +2312,6 @@ const deleteInvestment = async (id) => {
       } catch (e) {
         console.warn('Supabase delete investment exception:', e)
       }
-    }
-    
-    // Refund linked funding account
-    if (inv && inv.funding_account_id) {
-      const cost = Number(inv.quantity || 0) * Number(inv.buy_price || inv.average_cost || 0)
-      const costTwd = inv.currency === 'USD' ? cost * usdTwdRate.value : cost
-      
-      accounts.value = accounts.value.map(acc => {
-        if (acc.id === inv.funding_account_id) {
-          acc.balance += costTwd
-          if (acc.id && !String(acc.id).startsWith('local-') && !String(acc.id).startsWith('mock-')) {
-            try {
-              supabase.from('accounts').update({ balance: acc.balance }).eq('id', acc.id)
-            } catch (dbErr) {
-              console.warn('Refund funding account failed:', dbErr)
-            }
-          }
-        }
-        return acc
-      })
-      localStorage.setItem('local_accounts', JSON.stringify(accounts.value))
     }
     
     investments.value = investments.value.filter(i => i.id !== id)
@@ -2782,6 +2704,77 @@ const processAutoRecords = async () => {
               targetAcc._dirty = true
             } else {
               console.warn(`Target account ${ar.target_account_id} not found for transfer`)
+            }
+          } else if (type === 'dca_invest') {
+            // Postpone execution to next workday if it's weekend (Saturday or Sunday)
+            const dayOfWeek = today.getDay()
+            if (dayOfWeek === 0 || dayOfWeek === 6) {
+              continue // Skip this auto record execution for today, try again tomorrow
+            }
+
+            const arCurrency = ar.currency || 'TWD'
+            const deductTwd = arCurrency === 'USD' ? amount * (usdTwdRate.value || 30) : amount
+            acc.balance -= deductTwd
+            if (acc.balance < 0) acc.balance = 0
+            
+            const symbol = (ar.symbol || '').trim().toUpperCase()
+            if (symbol) {
+              const querySym = getYahooSymbol(symbol, /^\d{4,6}$/.test(symbol) ? 'tw_stock' : 'stock')
+              const price = await fetchYahooPrice(querySym)
+              if (price !== null && price > 0) {
+                const isUsdStock = !(/^\d{4,6}$/.test(symbol) || symbol.endsWith('.TW') || symbol.endsWith('.TWO'))
+                
+                let quantity = 0
+                if (arCurrency === 'USD') {
+                  quantity = Number((amount / price).toFixed(6))
+                } else {
+                  quantity = isUsdStock 
+                    ? Number(((amount / (usdTwdRate.value || 30)) / price).toFixed(6))
+                    : Number((amount / price).toFixed(6))
+                }
+                  
+                const nowStr = new Date().toISOString()
+                const generatedId = 'local-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9)
+                
+                const payload = {
+                  id: generatedId,
+                  asset_class: /^\d{4,6}$/.test(symbol) ? 'tw_stock' : 'stock',
+                  symbol: symbol,
+                  name: symbol,
+                  quantity: quantity,
+                  average_cost: price,
+                  currency: isUsdStock ? 'USD' : 'TWD',
+                  type: 'Stock',
+                  current_price: price,
+                  buy_price: price,
+                  buy_date: today.toISOString().split('T')[0],
+                  created_at: nowStr,
+                  price_updated_at: nowStr,
+                  funding_account_id: acc.id,
+                  custom_group: '',
+                  include_in_chart: true
+                }
+                
+                try {
+                  const dbPayload = { ...payload }
+                  delete dbPayload.id
+                  delete dbPayload.include_in_chart
+                  const { data, error } = await supabase.from('investments').insert([dbPayload]).select()
+                  if (!error && data) {
+                    payload.id = data[0].id
+                  }
+                } catch (dbErr) {
+                  console.warn('Sync DCA investment to DB failed:', dbErr)
+                }
+                
+                investments.value.unshift(payload)
+                localStorage.setItem('local_investments', JSON.stringify(investments.value))
+                showToast(`定期買股：${acc.name} 扣款 ${arCurrency} ${amount} 購入 ${symbol} (${quantity} 股, 單價 ${price})`)
+              } else {
+                showToast(`定期買股：${acc.name} 扣款 ${arCurrency} ${amount}，但無法獲取 ${symbol} 的股價，請手動確認。`)
+              }
+            } else {
+              showToast(`定期買股：${acc.name} 扣款 ${arCurrency} ${amount}，但未設定股票代號。`)
             }
           }
           
@@ -4160,26 +4153,7 @@ onUnmounted(() => {
                 <input v-model="newAsset.name" placeholder="例: 元大台灣 50" class="input-flat-right text-right" />
               </div>
 
-              <!-- 連結扣款帳戶 -->
-              <div class="form-item-row" style="position: relative;">
-                <span class="row-label">連結扣款帳戶</span>
-                <div class="row-value-wrapper">
-                  <span class="display-val" style="color: var(--color-text); font-size: 0.95rem; font-weight: 700;">
-                    {{ accounts.find(a => a.id === newAsset.funding_account_id)?.name || '不連結扣款' }}
-                  </span>
-                  <PhCaretRight size="16" class="chevron-icon" />
-                </div>
-                <select v-model="newAsset.funding_account_id" class="invisible-select">
-                  <option :value="null">不連結扣款</option>
-                  <option 
-                    v-for="acc in accounts.filter(a => ['Bank', 'Cash', 'E-Wallet', 'OtherLiquid'].includes(a.type))" 
-                    :key="acc.id" 
-                    :value="acc.id"
-                  >
-                    {{ acc.name }} ({{ translateTypeSettings(acc.type) }})
-                  </option>
-                </select>
-              </div>
+
 
               <!-- 自訂群組 -->
               <div class="form-item-row" style="position: relative;">
@@ -4294,11 +4268,11 @@ onUnmounted(() => {
                         fontWeight: '700',
                         padding: '3px 8px',
                         borderRadius: '6px',
-                        border: ar.type === 'income' ? '1px solid var(--color-success)' : ar.type === 'expense' ? '1px solid var(--color-accent)' : '1px solid var(--color-primary)',
-                        color: ar.type === 'income' ? 'var(--color-success)' : ar.type === 'expense' ? 'var(--color-accent)' : 'var(--color-primary)',
+                        border: ar.type === 'income' ? '1px solid var(--color-success)' : ar.type === 'expense' ? '1px solid var(--color-accent)' : ar.type === 'dca_invest' ? '1px solid #8b5cf6' : '1px solid var(--color-primary)',
+                        color: ar.type === 'income' ? 'var(--color-success)' : ar.type === 'expense' ? 'var(--color-accent)' : ar.type === 'dca_invest' ? '#a78bfa' : 'var(--color-primary)',
                         background: 'transparent'
                       }">
-                        {{ ar.type === 'income' ? '固定增加' : ar.type === 'expense' ? '固定減少' : '定期轉帳' }}
+                        {{ ar.type === 'income' ? '固定增加' : ar.type === 'expense' ? '固定減少' : ar.type === 'dca_invest' ? '定期買股' : '定期轉帳' }}
                       </span>
                       <!-- Tag -->
                       <span v-if="ar.tag" style="font-size: 0.85rem; font-weight: 700; color: var(--color-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 120px;">
@@ -4307,6 +4281,10 @@ onUnmounted(() => {
                       <!-- Transfer details -->
                       <span style="font-size: 0.72rem; font-weight: normal; color: var(--color-text-muted);" v-if="ar.type === 'transfer'">
                         (至: {{ accounts.find(a => a.id === ar.target_account_id)?.name || '未知' }}{{ ar.interest_rate ? ` · 利率 ${ar.interest_rate}%` : '' }})
+                      </span>
+                      <!-- Investment DCA details -->
+                      <span style="font-size: 0.72rem; font-weight: normal; color: var(--color-text-muted);" v-if="ar.type === 'dca_invest'">
+                        (標的: {{ ar.symbol || '未設定' }})
                       </span>
                     </div>
                     <!-- Date -->
@@ -4326,7 +4304,7 @@ onUnmounted(() => {
                       fontWeight: '800',
                       color: ar.type === 'income' ? 'var(--color-success)' : 'var(--color-text)'
                     }">
-                      {{ ar.type === 'income' ? '+' : '-' }}{{ Number(ar.amount).toLocaleString('zh-TW', { style: 'currency', currency: 'TWD', minimumFractionDigits: 0 }) }}
+                      {{ ar.type === 'income' ? '+' : '-' }}{{ Number(ar.amount).toLocaleString(ar.currency === 'USD' ? 'en-US' : 'zh-TW', { style: 'currency', currency: ar.currency || 'TWD', minimumFractionDigits: 0 }) }}
                     </span>
                     <!-- Delete Button inside Card -->
                     <button type="button" @click.stop="deleteAutoRecord(idx)" style="background: rgba(224, 59, 84, 0.08); border: none; padding: 6px; border-radius: 8px; box-shadow: none; cursor: pointer; color: var(--color-danger); display: flex; align-items: center; justify-content: center; width: 26px; height: 26px; margin: 0; min-height: unset; height: auto;" onmouseover="this.style.background='rgba(224, 59, 84, 0.15)'" onmouseout="this.style.background='rgba(224, 59, 84, 0.08)'">
@@ -4396,6 +4374,15 @@ onUnmounted(() => {
             >
               定期轉帳
             </button>
+            <button 
+              type="button" 
+              class="seg-btn active-dca_invest" 
+              :class="{ active: activeAutoRecord.type === 'dca_invest' }"
+              style="border-radius: 10px; flex: 1;"
+              @click="activeAutoRecord.type = 'dca_invest'; activeAutoRecord.target_account_id = null; if(!activeAutoRecord.symbol) activeAutoRecord.symbol = ''"
+            >
+              定期買股
+            </button>
           </div>
 
           <!-- Card 1 -->
@@ -4403,7 +4390,7 @@ onUnmounted(() => {
             <div class="form-item-row">
               <div class="row-label-group">
                 <span class="row-label">金額</span>
-                <span class="row-sublabel">TWD</span>
+                <span class="row-sublabel">{{ activeAutoRecord.currency || 'TWD' }}</span>
               </div>
               <div class="row-value-wrapper">
                 <input v-model.number="activeAutoRecord.amount" type="number" placeholder="0" class="input-flat-right" />
@@ -4412,7 +4399,33 @@ onUnmounted(() => {
                 </button>
               </div>
             </div>
+
+            <!-- DCA Currency (Only for DCA Investment type) -->
+            <div v-if="activeAutoRecord.type === 'dca_invest'" class="form-item-row" style="position: relative;">
+              <span class="row-label">扣款幣別</span>
+              <div class="row-value-wrapper">
+                <span class="display-val" style="color: var(--color-text); font-size: 0.95rem; font-weight: 700;">
+                  {{ activeAutoRecord.currency || 'TWD' }}
+                </span>
+                <PhCaretRight size="16" class="chevron-icon" />
+              </div>
+              <select v-model="activeAutoRecord.currency" class="invisible-select">
+                <option value="TWD">TWD (新台幣)</option>
+                <option value="USD">USD (美金)</option>
+              </select>
+            </div>
             
+            <!-- Symbol Input (Only for DCA Investment type) -->
+            <div v-if="activeAutoRecord.type === 'dca_invest'" class="form-item-row">
+              <div class="row-label-group">
+                <span class="row-label">股票代號</span>
+                <span class="row-sublabel">例如 0050.TW, VOO</span>
+              </div>
+              <div class="row-value-wrapper">
+                <input v-model="activeAutoRecord.symbol" placeholder="請輸入代號" class="input-flat-right text-right" style="text-transform: uppercase;" />
+              </div>
+            </div>
+
             <div class="form-item-row" style="position: relative;">
               <span class="row-label">記錄日期</span>
               <div class="row-value-wrapper">
@@ -6219,8 +6232,8 @@ onUnmounted(() => {
   color: #ffffff !important;
 }
 
-.seg-btn.active-transfer.active {
-  background: #3a59cc !important;
+.seg-btn.active-dca_invest.active {
+  background: #8b5cf6 !important;
   color: #ffffff !important;
 }
 
