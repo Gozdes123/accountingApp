@@ -5233,6 +5233,8 @@ onUnmounted(() => {
   display: flex;
   gap: 16px;
   align-items: stretch;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .left-bar-container {
@@ -5247,6 +5249,31 @@ onUnmounted(() => {
   flex-direction: column;
   flex-shrink: 0;
   margin-left: -1.25rem;
+  transition: all 0.3s ease;
+}
+
+@media (max-width: 480px) {
+  .left-bar-container {
+    width: 36px;
+    margin-left: -0.75rem;
+    border-top-right-radius: 18px;
+    border-bottom-right-radius: 18px;
+  }
+  .main-layout {
+    gap: 12px;
+  }
+  .tab-view-content {
+    padding: 1.5rem 0.75rem 120px 0.75rem !important;
+  }
+  .group-header-card {
+    padding: 1.1rem 1.1rem !important;
+  }
+  .expanded-header {
+    padding: 0.85rem 1.1rem !important;
+  }
+  .group-card {
+    padding: 1.1rem 1.1rem !important;
+  }
 }
 
 .bar-segment {
@@ -5263,6 +5290,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 1rem;
+  min-width: 0;
 }
 
 /* Grouped Card Style */
@@ -5379,6 +5407,7 @@ onUnmounted(() => {
   flex-direction: column;
   align-items: flex-start;
   max-width: 65%;
+  min-width: 0;
 }
 
 .group-title-text {
