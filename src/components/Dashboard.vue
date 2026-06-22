@@ -408,7 +408,8 @@ const editInvestment = (inv) => {
     buy_price: inv.average_cost || inv.buy_price || 0,
     buy_date: inv.buy_date || new Date().toISOString().split('T')[0],
     custom_group: inv.custom_group ?? '',
-    funding_account_id: inv.funding_account_id || null
+    funding_account_id: inv.funding_account_id || null,
+    include_in_chart: inv.include_in_chart !== false
   }
   
   subListType.value = null
@@ -1367,19 +1368,43 @@ const trendPeriodROI = computed(() => {
   }
 })
 
+const getGroupColor = (grp) => {
+  const colors = ['#7839ec', '#5c67f5', '#2ec173', '#a0a0a5', '#ff9f0a', '#64d2ff', '#bf5af2', '#ff453a']
+  const activeGroups = Array.from(new Set(investments.value.filter(i => Number(i.quantity || 0) > 0 && i.include_in_chart !== false).map(i => i.custom_group || '未分類'))).sort()
+  const idx = activeGroups.indexOf(grp)
+  return idx !== -1 ? colors[idx % colors.length] : '#7839ec'
+}
+
 const trendRoiSummaryText = computed(() => {
-  const datasets = trendDatasets.value
-  if (datasets.length < 2) return { invest: '投資報酬率無變動', nw: '淨資產增長率無變動' }
-  const first = datasets[0]
-  const last = datasets[datasets.length - 1]
+  const groupMetrics = {}
   
-  const investRoi = first.invest > 0 ? ((last.invest - first.invest) / first.invest) * 100 : 0
-  const nwRoi = first.netWorth > 0 ? ((last.netWorth - first.netWorth) / first.netWorth) * 100 : 0
-  
-  return {
-    invest: `投資累計報酬率：${investRoi >= 0 ? '+' : ''}${investRoi.toFixed(2)}%`,
-    nw: `淨資產累計增長率：${nwRoi >= 0 ? '+' : ''}${nwRoi.toFixed(2)}%`
+  investments.value.forEach(item => {
+    const qty = Number(item.quantity || 0)
+    if (qty <= 0 || item.include_in_chart === false) return
+    const cost = Number(item.buy_price || item.average_cost || 0)
+    const current = Number(item.current_price || 0)
+    const currency = item.currency || 'TWD'
+    const grp = item.custom_group || '未分類'
+    
+    const isUS = currency === 'USD' || (item.asset_class || '').toLowerCase() === 'us_stock'
+    const costTwd = isUS ? qty * cost * usdTwdRate.value : qty * cost
+    const valTwd = isUS ? qty * current * usdTwdRate.value : qty * current
+
+    if (!groupMetrics[grp]) {
+      groupMetrics[grp] = { cost: 0, val: 0 }
+    }
+    groupMetrics[grp].cost += costTwd
+    groupMetrics[grp].val += valTwd
+  })
+
+  const summaries = {}
+  for (const [grp, metrics] of Object.entries(groupMetrics)) {
+    if (metrics.cost > 0) {
+      const roi = ((metrics.val - metrics.cost) / metrics.cost) * 100
+      summaries[grp] = `${grp}：${roi >= 0 ? '+' : ''}${roi.toFixed(2)}%`
+    }
   }
+  return summaries
 })
 
 const trendChartData = computed(() => {
@@ -1447,38 +1472,71 @@ const trendChartData = computed(() => {
       ]
     }
   } else {
-    // ROI view: Plot Investment ROI % and Net Worth ROI %
+    // ROI view: Plot each custom investment group dynamically!
     const first = datasets[0]
     const firstInvest = first.invest
-    const firstNetWorth = first.netWorth
     
+    // Overall period ROI trend line
     const investRoiData = datasets.map(r => firstInvest > 0 ? ((r.invest - firstInvest) / firstInvest) * 100 : 0)
-    const netWorthRoiData = datasets.map(r => firstNetWorth > 0 ? ((r.netWorth - firstNetWorth) / firstNetWorth) * 100 : 0)
+    const overall_current_ROI = totalInvestmentPnLPct.value
     
+    // Group metrics
+    const groupMetrics = {}
+    investments.value.forEach(item => {
+      const qty = Number(item.quantity || 0)
+      if (qty <= 0 || item.include_in_chart === false) return
+      const cost = Number(item.buy_price || item.average_cost || 0)
+      const current = Number(item.current_price || 0)
+      const currency = item.currency || 'TWD'
+      const grp = item.custom_group || '未分類'
+      
+      const isUS = currency === 'USD' || (item.asset_class || '').toLowerCase() === 'us_stock'
+      const costTwd = isUS ? qty * cost * usdTwdRate.value : qty * cost
+      const valTwd = isUS ? qty * current * usdTwdRate.value : qty * current
+
+      if (!groupMetrics[grp]) {
+        groupMetrics[grp] = { cost: 0, val: 0 }
+      }
+      groupMetrics[grp].cost += costTwd
+      groupMetrics[grp].val += valTwd
+    })
+
+    const datasetsList = []
+
+    for (const [grp, metrics] of Object.entries(groupMetrics)) {
+      if (metrics.cost > 0) {
+        const roi = ((metrics.val - metrics.cost) / metrics.cost) * 100
+        const color = getGroupColor(grp)
+
+        datasetsList.push({
+          label: grp,
+          data: investRoiData.map(val => val * (roi / (overall_current_ROI || 1))),
+          borderColor: color,
+          tension: 0.35,
+          borderWidth: 2.5,
+          fill: false,
+          pointRadius: datasets.length > 20 ? 0 : 2,
+          pointHoverRadius: 5
+        })
+      }
+    }
+
+    if (datasetsList.length === 0) {
+      datasetsList.push({
+        label: '整體投資報酬率',
+        data: investRoiData,
+        borderColor: '#7839ec',
+        tension: 0.35,
+        borderWidth: 2.5,
+        fill: false,
+        pointRadius: datasets.length > 20 ? 0 : 2,
+        pointHoverRadius: 5
+      })
+    }
+
     return {
       labels,
-      datasets: [
-        {
-          label: '投資報酬率',
-          data: investRoiData,
-          borderColor: '#7839ec',
-          tension: 0.35,
-          borderWidth: 2.5,
-          fill: false,
-          pointRadius: datasets.length > 20 ? 0 : 2,
-          pointHoverRadius: 5
-        },
-        {
-          label: '淨資產增長率',
-          data: netWorthRoiData,
-          borderColor: '#5c67f5',
-          tension: 0.35,
-          borderWidth: 2.5,
-          fill: false,
-          pointRadius: datasets.length > 20 ? 0 : 2,
-          pointHoverRadius: 5
-        }
-      ]
+      datasets: datasetsList
     }
   }
 })
@@ -1490,7 +1548,18 @@ const trendChartOptions = computed(() => {
     maintainAspectRatio: false,
     interaction: { mode: 'index', intersect: false },
     plugins: {
-      legend: { display: false },
+      legend: { 
+        display: isRoi,
+        position: 'top',
+        align: 'center',
+        labels: {
+          color: 'var(--color-text)',
+          font: { size: 10, family: 'Inter', weight: 'bold' },
+          boxWidth: 8,
+          boxHeight: 8,
+          padding: 8
+        }
+      },
       tooltip: {
         backgroundColor: 'rgba(30, 30, 32, 0.95)',
         titleColor: '#ffffff',
@@ -1595,6 +1664,18 @@ const doughnutChartOptions = {
 // ── Functions ─────────────────────────────────────────────────────
 const togglePrivacy = () => { isHidden.value = !isHidden.value }
 
+const mergeExclusionSettings = () => {
+  const excludedAccs = JSON.parse(localStorage.getItem('excluded_accounts_ids') || '[]')
+  accounts.value.forEach(a => {
+    a.include_in_chart = !excludedAccs.includes(a.id)
+  })
+
+  const excludedInvs = JSON.parse(localStorage.getItem('excluded_investments_ids') || '[]')
+  investments.value.forEach(i => {
+    i.include_in_chart = !excludedInvs.includes(i.id)
+  })
+}
+
 const fetchAllData = async () => {
   // 1. 快取優先渲染 (SWR) — 如果本機有舊資料，直接先呈現在畫面上，達成秒開效果
   const cachedAccs = localStorage.getItem('local_accounts')
@@ -1605,6 +1686,7 @@ const fetchAllData = async () => {
     if (cachedAccs) accounts.value = JSON.parse(cachedAccs)
     if (cachedInvs) investments.value = JSON.parse(cachedInvs)
     if (cachedRate) usdTwdRate.value = Number(cachedRate)
+    mergeExclusionSettings()
     isInitialDataLoaded.value = true
   }
 
@@ -1672,6 +1754,9 @@ const fetchAllData = async () => {
   }
   
   investments.value = loadedInvestments
+  
+  // 套用本機的圖表排除設定 (因為 Supabase DB 無 include_in_chart 欄位)
+  mergeExclusionSettings()
 
   // 所有最新資料同步完成後，確保關閉載入畫面
   isInitialDataLoaded.value = true
@@ -1903,8 +1988,18 @@ const addAssetItem = async () => {
       const qty = Number(newAsset.value.quantity || 0)
       const buyPrice = Number(newAsset.value.buy_price || 0)
       
+      const itemId = isEditing.value ? editingId.value : generatedId
+      const excludedInvs = JSON.parse(localStorage.getItem('excluded_investments_ids') || '[]')
+      if (newAsset.value.include_in_chart === false) {
+        if (!excludedInvs.includes(itemId)) excludedInvs.push(itemId)
+      } else {
+        const idx = excludedInvs.indexOf(itemId)
+        if (idx !== -1) excludedInvs.splice(idx, 1)
+      }
+      localStorage.setItem('excluded_investments_ids', JSON.stringify(excludedInvs))
+
       const payload = {
-        id: isEditing.value ? editingId.value : generatedId,
+        id: itemId,
         asset_class: newAsset.value.type, // Stock, Crypto, Fund
         symbol: newAsset.value.symbol.toUpperCase(),
         name: newAsset.value.name || newAsset.value.symbol.toUpperCase(),
@@ -1920,7 +2015,8 @@ const addAssetItem = async () => {
         created_at: isEditing.value ? (investments.value.find(i => i.id === editingId.value)?.created_at || nowStr) : nowStr,
         price_updated_at: nowStr,
         custom_group: newAsset.value.custom_group || '',
-        funding_account_id: newAsset.value.funding_account_id || null
+        funding_account_id: newAsset.value.funding_account_id || null,
+        include_in_chart: newAsset.value.include_in_chart !== false
       }
       
       // Calculate cash funding account adjustment
@@ -2049,8 +2145,18 @@ const addAssetItem = async () => {
         return
       }
       
+      const itemId = isEditing.value ? editingId.value : generatedId
+      const excludedAccs = JSON.parse(localStorage.getItem('excluded_accounts_ids') || '[]')
+      if (newAsset.value.include_in_chart === false) {
+        if (!excludedAccs.includes(itemId)) excludedAccs.push(itemId)
+      } else {
+        const idx = excludedAccs.indexOf(itemId)
+        if (idx !== -1) excludedAccs.splice(idx, 1)
+      }
+      localStorage.setItem('excluded_accounts_ids', JSON.stringify(excludedAccs))
+
       const payload = {
-        id: isEditing.value ? editingId.value : generatedId,
+        id: itemId,
         name: newAsset.value.name,
         type: newAsset.value.type,
         balance: Math.abs(Number(newAsset.value.balance)),
@@ -3356,17 +3462,17 @@ onActivated(() => {
             </div>
           </template>
           <template v-else>
-            <div style="font-size: 0.95rem; font-weight: 700; color: var(--color-text); line-height: 1.6;">
-              {{ trendRoiSummaryText.invest }}
-            </div>
-            <div style="font-size: 0.95rem; font-weight: 700; color: var(--color-text); line-height: 1.6; margin-top: 4px;">
-              {{ trendRoiSummaryText.nw }}
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 4px 16px; text-align: left;">
+              <div v-for="(val, grp) in trendRoiSummaryText" :key="grp" style="font-size: 0.88rem; font-weight: 700; color: var(--color-text); line-height: 1.5; display: flex; align-items: center; gap: 6px;">
+                <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%;" :style="{ background: getGroupColor(grp) }"></span>
+                {{ val }}
+              </div>
             </div>
           </template>
         </div>
 
         <!-- Legend -->
-        <div style="display: flex; gap: 24px; align-items: center; margin-bottom: 24px; padding-left: 12px;">
+        <div style="display: flex; gap: 12px 24px; align-items: center; margin-bottom: 24px; padding-left: 12px; flex-wrap: wrap;">
           <template v-if="trendType === 'net_worth'">
             <div style="display: flex; align-items: center; gap: 6px; font-size: 0.82rem; font-weight: bold; color: var(--color-text);">
               <span style="display: inline-block; width: 12px; height: 12px; background: #5c67f5; border-radius: 2px;"></span>
@@ -3389,14 +3495,7 @@ onActivated(() => {
             </div>
           </template>
           <template v-else>
-            <div style="display: flex; align-items: center; gap: 6px; font-size: 0.82rem; font-weight: bold; color: var(--color-text);">
-              <span style="display: inline-block; width: 12px; height: 12px; background: #7839ec; border-radius: 2px;"></span>
-              投資報酬率
-            </div>
-            <div style="display: flex; align-items: center; gap: 6px; font-size: 0.82rem; font-weight: bold; color: var(--color-text);">
-              <span style="display: inline-block; width: 12px; height: 12px; background: #5c67f5; border-radius: 2px;"></span>
-              淨資產增長率
-            </div>
+            <!-- Native interactive legend is displayed inside chart container -->
           </template>
         </div>
 
