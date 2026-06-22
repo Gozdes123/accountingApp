@@ -2103,6 +2103,7 @@ const addAssetItem = async () => {
         try {
           const dbPayload = { ...payload }
           delete dbPayload.id
+          delete dbPayload.include_in_chart
           const { data, error } = await supabase.from('investments').insert([dbPayload]).select()
           if (!error && data) payload.id = data[0].id
         } catch (dbErr) {
