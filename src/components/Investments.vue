@@ -109,16 +109,29 @@ const fetchYahooPrice = async (symbol) => {
     const isProd = import.meta.env.PROD
     const yhUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=1d`
     
+    // 1. If in local development, try local dev proxy first
     if (!isProd) {
-      const res = await fetch(`/yahoo-finance/v8/finance/chart/${symbol}?interval=1d&range=1d`)
+      try {
+        const res = await fetch(`/yahoo-finance/v8/finance/chart/${symbol}?interval=1d&range=1d`)
+        if (res.ok) {
+          const data = await res.json()
+          return data?.chart?.result?.[0]?.meta?.regularMarketPrice ?? null
+        }
+      } catch {}
+    }
+
+    // 2. In Production (or fallback in Local): Try the serverless API proxy
+    try {
+      const res = await fetch(`/api/yahoo-proxy?symbol=${symbol}`)
       if (res.ok) {
         const data = await res.json()
         return data?.chart?.result?.[0]?.meta?.regularMarketPrice ?? null
       }
-      return null
+    } catch (e) {
+      console.warn('Serverless API proxy failed, falling back to public proxies...', e)
     }
 
-    // Try corsproxy.io first
+    // 3. Fallback: Try corsproxy.io
     try {
       const res = await fetch(`https://corsproxy.io/?${encodeURIComponent(yhUrl)}`)
       if (res.ok) {
@@ -129,7 +142,7 @@ const fetchYahooPrice = async (symbol) => {
       console.warn('corsproxy.io failed, falling back to allorigins...', e)
     }
 
-    // Fallback: Try allorigins.win
+    // 4. Fallback: Try allorigins.win
     try {
       const res = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(yhUrl)}`)
       if (res.ok) {

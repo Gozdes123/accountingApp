@@ -1898,16 +1898,29 @@ const fetchYahooPrice = async (symbol) => {
     const isProd = import.meta.env.PROD
     const yhUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=1d`
     
+    // 1. If in local development, try local dev proxy first
     if (!isProd) {
-      const res = await fetch(`/yahoo-finance/v8/finance/chart/${symbol}?interval=1d&range=1d`)
+      try {
+        const res = await fetch(`/yahoo-finance/v8/finance/chart/${symbol}?interval=1d&range=1d`)
+        if (res.ok) {
+          const data = await res.json()
+          return data?.chart?.result?.[0]?.meta?.regularMarketPrice ?? null
+        }
+      } catch {}
+    }
+
+    // 2. In Production (or fallback in Local): Try the serverless API proxy
+    try {
+      const res = await fetch(`/api/yahoo-proxy?symbol=${symbol}`)
       if (res.ok) {
         const data = await res.json()
         return data?.chart?.result?.[0]?.meta?.regularMarketPrice ?? null
       }
-      return null
+    } catch (e) {
+      console.warn('Serverless API proxy failed, falling back to public proxies...', e)
     }
 
-    // Try corsproxy.io first
+    // 3. Fallback: Try corsproxy.io
     try {
       const res = await fetch(`https://corsproxy.io/?${encodeURIComponent(yhUrl)}`)
       if (res.ok) {
@@ -1918,7 +1931,7 @@ const fetchYahooPrice = async (symbol) => {
       console.warn('corsproxy.io failed, falling back to allorigins...', e)
     }
 
-    // Fallback: Try allorigins.win
+    // 4. Fallback: Try allorigins.win
     try {
       const res = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(yhUrl)}`)
       if (res.ok) {
@@ -4087,7 +4100,7 @@ onUnmounted(() => {
             <div class="form-card-black">
               <!-- 股票代號 -->
               <div class="form-item-row">
-                <div class="row-label-group" style="display: flex; align-items: center; gap: 4px;">
+                <div class="row-label-group" style="display: flex; flex-direction: row; align-items: center; gap: 4px;">
                   <span class="row-label">股票代號</span>
                   <PhInfo size="14" style="color: var(--color-text-muted); opacity: 0.8;" />
                 </div>
@@ -4097,17 +4110,28 @@ onUnmounted(() => {
               </div>
 
               <!-- 驗證狀態列 -->
-              <div v-if="verificationResult" style="padding: 10px 18px; border-bottom: 1px solid rgba(255, 255, 255, 0.05); background: rgba(0,0,0,0.01); display: flex; align-items: center; font-size: 0.8rem; min-height: 32px;">
-                <div v-if="verificationResult.loading" style="display: flex; align-items: center; gap: 6px; color: var(--color-text-muted);">
-                  <PhArrowClockwise size="14" class="spin" />
-                  <span>正在向 Yahoo Finance 驗證並取得最新股價...</span>
+              <div v-if="verificationResult" style="margin: 8px 18px; padding: 12px 16px; border-radius: 12px; font-size: 0.82rem; transition: all 0.3s ease;"
+                   :style="{
+                     background: verificationResult.loading 
+                       ? 'rgba(92, 103, 245, 0.06)' 
+                       : (verificationResult.success ? 'rgba(46, 189, 89, 0.06)' : 'rgba(255, 69, 58, 0.06)'),
+                     border: verificationResult.loading 
+                       ? '1px solid rgba(92, 103, 245, 0.15)' 
+                       : (verificationResult.success ? '1px solid rgba(46, 189, 89, 0.15)' : '1px solid rgba(255, 69, 58, 0.15)'),
+                   }">
+                <!-- Loading State -->
+                <div v-if="verificationResult.loading" style="display: flex; align-items: center; gap: 8px; color: #5c67f5;">
+                  <PhArrowClockwise size="16" class="spin" />
+                  <span style="font-weight: 600;">正在向 Yahoo Finance 驗證並取得最新股價...</span>
                 </div>
-                <div v-else-if="verificationResult.success" style="display: flex; align-items: center; gap: 6px; color: #2ebd59; font-weight: 700;">
-                  <PhCheckCircle size="14" />
-                  <span>驗證成功：{{ verificationResult.symbol }} · 市價 TWD {{ (verificationResult.currency === 'USD' ? (verificationResult.price * usdTwdRate).toFixed(2) : verificationResult.price.toFixed(2)) }} ({{ verificationResult.currency }} {{ verificationResult.price }})</span>
+                <!-- Success State -->
+                <div v-else-if="verificationResult.success" style="display: flex; align-items: center; gap: 6px; color: #1b8a5a; font-weight: 700;">
+                  <PhCheckCircle size="16" weight="fill" style="color: #2ebd59; flex-shrink: 0;" />
+                  <span>{{ verificationResult.symbol }} · 市價 TWD {{ (verificationResult.currency === 'USD' ? (verificationResult.price * usdTwdRate).toFixed(2) : verificationResult.price.toFixed(2)) }} ({{ verificationResult.currency }} {{ verificationResult.price }})</span>
                 </div>
-                <div v-else style="display: flex; align-items: center; gap: 6px; color: #ff453a; font-weight: 700;">
-                  <PhInfo size="14" />
+                <!-- Error State -->
+                <div v-else style="display: flex; align-items: center; gap: 8px; color: #b91c1c; font-weight: 600;">
+                  <PhInfo size="16" weight="fill" style="color: #ff453a;" />
                   <span>{{ verificationResult.msg }}</span>
                 </div>
               </div>
