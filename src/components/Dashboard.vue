@@ -1737,7 +1737,7 @@ const fetchAllData = async () => {
       .select('*')
       .order('created_at', { ascending: true })
     
-    if (!accsErr && accs && accs.length > 0) {
+    if (!accsErr && accs) {
       loadedAccounts = accs
       localStorage.setItem('local_accounts', JSON.stringify(accs))
     } else {
@@ -1758,7 +1758,7 @@ const fetchAllData = async () => {
       .select('*')
       .order('created_at', { ascending: false })
       
-    if (!invsErr && invs && invs.length > 0) {
+    if (!invsErr && invs) {
       loadedInvestments = invs
       localStorage.setItem('local_investments', JSON.stringify(invs))
     } else {
@@ -3677,6 +3677,23 @@ onActivated(() => {
           </div>
         </div>
         <div v-else class="settings-empty">目前尚無自訂投資群組</div>
+      </div>
+
+      <!-- Advanced Settings / Data Reset -->
+      <div class="settings-section card" style="margin-top: 1rem; border: 1px solid rgba(255, 69, 58, 0.2); background: rgba(255, 69, 58, 0.02);">
+        <h4 class="section-title" style="color: var(--color-danger); margin-bottom: 0.5rem;">⚠️ 進階資料管理</h4>
+        <p style="font-size: 0.8rem; color: var(--color-text-muted); margin-bottom: 1rem; line-height: 1.4;">
+          如果您刪除了測試用的資產或投資，導致歷史走勢圖的基準點不正確，您可以使用此功能清空歷史走勢紀錄。系統將以您目前的資產狀態重新開始計算走勢。
+        </p>
+        <button 
+          @click="clearNetWorthHistory" 
+          style="width: 100%; padding: 12px; background: var(--color-danger); color: white; border: none; border-radius: 12px; font-weight: 700; font-size: 0.9rem; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px; box-shadow: 0 4px 12px rgba(255, 69, 58, 0.2); transition: all 0.2s;"
+          onmouseover="this.style.opacity='0.9'"
+          onmouseout="this.style.opacity='1'"
+        >
+          <PhTrash size="16" />
+          <span>重置走勢圖歷史紀錄</span>
+        </button>
       </div>
 
 
