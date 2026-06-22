@@ -120,37 +120,27 @@ const fetchYahooPrice = async (symbol) => {
       } catch {}
     }
 
-    // 2. In Production (or fallback in Local): Try the serverless API proxy
-    try {
-      const res = await fetch(`/api/yahoo-proxy?symbol=${symbol}`)
-      if (res.ok) {
-        const data = await res.json()
-        return data?.chart?.result?.[0]?.meta?.regularMarketPrice ?? null
-      }
-    } catch (e) {
-      console.warn('Serverless API proxy failed, falling back to public proxies...', e)
-    }
+    // 2. Sequential list of production/fallback proxies to try
+    const proxies = [
+      `/api/yahoo-proxy?symbol=${symbol}`,
+      `https://corsproxy.io/?${encodeURIComponent(yhUrl)}`,
+      `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(yhUrl)}`,
+      `https://api.allorigins.win/raw?url=${encodeURIComponent(yhUrl)}`
+    ]
 
-    // 3. Fallback: Try corsproxy.io
-    try {
-      const res = await fetch(`https://corsproxy.io/?${encodeURIComponent(yhUrl)}`)
-      if (res.ok) {
-        const data = await res.json()
-        return data?.chart?.result?.[0]?.meta?.regularMarketPrice ?? null
+    for (const proxyUrl of proxies) {
+      try {
+        const res = await fetch(proxyUrl)
+        if (res.ok) {
+          const data = await res.json()
+          const price = data?.chart?.result?.[0]?.meta?.regularMarketPrice
+          if (price !== undefined && price !== null) {
+            return price
+          }
+        }
+      } catch (e) {
+        console.warn(`Proxy ${proxyUrl} failed:`, e)
       }
-    } catch (e) {
-      console.warn('corsproxy.io failed, falling back to allorigins...', e)
-    }
-
-    // 4. Fallback: Try allorigins.win
-    try {
-      const res = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(yhUrl)}`)
-      if (res.ok) {
-        const data = await res.json()
-        return data?.chart?.result?.[0]?.meta?.regularMarketPrice ?? null
-      }
-    } catch (e) {
-      console.warn('allorigins fallback failed...', e)
     }
 
     return null
