@@ -3220,7 +3220,15 @@ onUnmounted(() => {
                   <div style="display: flex; flex-direction: column; align-items: flex-end;">
                     <span class="group-value-text" :class="{ 'text-dark': !listExpanded.invest, 'text-white': listExpanded.invest }">{{ isHidden ? '••••••' : formatCurrency(totalInvestments).replace('$', '') }}</span>
                     <!-- ROI badge for the entire portfolio -->
-                    <span v-if="!isHidden" style="font-size: 0.78rem; font-weight: 700; margin-top: 2px;" :style="{ color: listExpanded.invest ? '#ffffff' : (totalInvestmentPnL >= 0 ? '#2ebd59' : '#ff453a'), opacity: listExpanded.invest ? 0.9 : 1 }">
+                    <span v-if="!isHidden" style="font-size: 0.78rem; font-weight: 700; margin-top: 4px;" :style="listExpanded.invest ? {
+                      color: '#ffffff',
+                      background: 'rgba(255, 255, 255, 0.2)',
+                      padding: '2px 8px',
+                      borderRadius: '8px',
+                      display: 'inline-block'
+                    } : {
+                      color: totalInvestmentPnL >= 0 ? '#2ebd59' : '#ff453a'
+                    }">
                       {{ totalInvestmentPnL >= 0 ? '+' : '' }}{{ totalInvestmentPnL.toLocaleString('zh-TW', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) }} ({{ totalInvestmentPnLPct.toFixed(2) }}%)
                     </span>
                   </div>
@@ -3278,7 +3286,7 @@ onUnmounted(() => {
                             fontSize: '0.78rem',
                             fontWeight: '700'
                           }">
-                            {{ item.pnl >= 0 ? '+' : '' }}{{ item.pnlPct.toFixed(2) }}%
+                            {{ item.pnl >= 0 ? '+' : '' }}{{ isHidden ? '••••' : Math.round(item.pnl).toLocaleString('zh-TW') }} ({{ item.pnl >= 0 ? '+' : '' }}{{ item.pnlPct.toFixed(2) }}%)
                           </div>
                         </div>
                       </div>
@@ -4958,7 +4966,7 @@ onUnmounted(() => {
                     <span>持有 {{ item.qty }}, {{ item.currency }} {{ item.current_price }}</span>
                     <!-- Individual Stock ROI inside group -->
                     <span v-if="item.pnlPct !== undefined" :style="{ color: item.pnl >= 0 ? '#2ebd59' : '#ff453a', fontWeight: 'bold', marginLeft: '6px' }">
-                      {{ item.pnl >= 0 ? '+' : '' }}{{ item.pnlPct.toFixed(2) }}%
+                      {{ item.pnl >= 0 ? '+' : '' }}{{ isHidden ? '••••' : Math.round(item.pnl).toLocaleString('zh-TW') }} ({{ item.pnl >= 0 ? '+' : '' }}{{ item.pnlPct.toFixed(2) }}%)
                     </span>
                   </div>
                 </div>
@@ -6522,5 +6530,11 @@ onUnmounted(() => {
   margin-top: 0 !important;
   font-size: 0.8rem !important;
   opacity: 0.85 !important;
+}
+.text-white {
+  color: #ffffff !important;
+}
+.text-dark {
+  color: #1a1a1a !important;
 }
 </style>
