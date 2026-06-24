@@ -15,9 +15,55 @@ export default async function handler(req, res) {
     return;
   }
 
-  const { symbol } = req.query;
+  const { symbol, symbols } = req.query;
+
+  // ── Batch mode: ?symbols=AAPL,2330.TW,BTC-USD ───────────────────
+  if (symbols) {
+    const symList = symbols.split(',').map(s => s.trim()).filter(Boolean);
+    if (symList.length === 0) {
+      res.status(400).json({ error: 'symbols parameter is empty' });
+      return;
+    }
+
+    try {
+      const yhUrl = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(symList.join(','))}&fields=regularMarketPrice,currency,shortName`;
+      const response = await fetch(yhUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'application/json',
+          'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7',
+          'Cache-Control': 'no-cache',
+          'Pragma': 'no-cache',
+          'Referer': 'https://finance.yahoo.com/',
+          'Origin': 'https://finance.yahoo.com'
+        }
+      });
+
+      if (!response.ok) {
+        res.status(response.status).json({ error: `Failed to fetch from Yahoo Finance: ${response.statusText}` });
+        return;
+      }
+
+      const data = await response.json();
+      // Return a map: { symbol -> regularMarketPrice }
+      const result = {};
+      const quotes = data?.quoteResponse?.result ?? [];
+      for (const q of quotes) {
+        if (q.symbol && q.regularMarketPrice != null) {
+          result[q.symbol] = q.regularMarketPrice;
+        }
+      }
+      res.status(200).json({ prices: result });
+      return;
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+      return;
+    }
+  }
+
+  // ── Single mode: ?symbol=AAPL (backward compatible) ─────────────
   if (!symbol) {
-    res.status(400).json({ error: 'Symbol parameter is required' });
+    res.status(400).json({ error: 'symbol or symbols parameter is required' });
     return;
   }
 

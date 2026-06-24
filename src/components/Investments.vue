@@ -103,13 +103,47 @@ const getYahooSymbol = (symbol, assetClass) => {
   return sym
 }
 
-// 2. Stock price via Vite proxy (dev) / allorigins proxy (prod) → Yahoo Finance
+// 2. Batch: fetch multiple symbols in one API call → Yahoo Finance v7/quote
+const fetchYahooPricesBatch = async (querySymbols) => {
+  // querySymbols: array of Yahoo-formatted symbols e.g. ['2330.TW', 'AAPL', 'BTC-USD']
+  const isProd = import.meta.env.PROD
+  const joined = querySymbols.join(',')
+
+  // Dev: try local Vite proxy (single-symbol fallback only)
+  // Prod: try our Vercel batch endpoint first
+  if (isProd) {
+    try {
+      const res = await fetch(`/api/yahoo-proxy?symbols=${encodeURIComponent(joined)}`)
+      if (res.ok) {
+        const data = await res.json()
+        if (data?.prices) return data.prices  // { 'AAPL': 185.2, '2330.TW': 980, ... }
+      }
+    } catch (e) {
+      console.warn('Batch proxy failed, falling back to parallel singles:', e)
+    }
+  }
+
+  // Fallback: fetch all symbols in parallel (concurrent, not sequential)
+  const results = await Promise.allSettled(
+    querySymbols.map(sym => fetchYahooPrice(sym))
+  )
+  const priceMap = {}
+  querySymbols.forEach((sym, i) => {
+    const r = results[i]
+    if (r.status === 'fulfilled' && r.value !== null) {
+      priceMap[sym] = r.value
+    }
+  })
+  return priceMap
+}
+
+// 2b. Single symbol fallback (used by batch fallback path)
 const fetchYahooPrice = async (symbol) => {
   try {
     const isProd = import.meta.env.PROD
     const yhUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=1d`
-    
-    // 1. If in local development, try local dev proxy first
+
+    // Local dev proxy
     if (!isProd) {
       try {
         const res = await fetch(`/yahoo-finance/v8/finance/chart/${symbol}?interval=1d&range=1d`)
@@ -120,7 +154,7 @@ const fetchYahooPrice = async (symbol) => {
       } catch {}
     }
 
-    // 2. Sequential list of production/fallback proxies to try
+    // Production fallback proxies (tried in parallel for speed)
     const proxies = [
       `/api/yahoo-proxy?symbol=${symbol}`,
       `https://corsproxy.io/?${encodeURIComponent(yhUrl)}`,
@@ -134,22 +168,19 @@ const fetchYahooPrice = async (symbol) => {
         if (res.ok) {
           const data = await res.json()
           const price = data?.chart?.result?.[0]?.meta?.regularMarketPrice
-          if (price !== undefined && price !== null) {
-            return price
-          }
+          if (price !== undefined && price !== null) return price
         }
       } catch (e) {
         console.warn(`Proxy ${proxyUrl} failed:`, e)
       }
     }
-
     return null
   } catch {
     return null
   }
 }
 
-// ── Main: Refresh all prices ────────────────────────────────────────
+// ── Main: Refresh all prices (batch + parallel) ──────────────────────
 const refreshPrices = async () => {
   if (isRefreshing.value) return
   isRefreshing.value = true
@@ -160,35 +191,48 @@ const refreshPrices = async () => {
 
   usdTwdRate.value = await fetchUsdTwdRate()
 
-  // 只對每個 symbol 抓一次報價，全部符合的 row 都更新
-  const symbolMap = {}
+  // 1. Deduplicate symbols → build querySym list
+  const symbolMap = {}  // originalKey → { cls, ids[], querySym }
   for (const inv of investments.value) {
     const key = inv.symbol.toUpperCase()
-    if (!symbolMap[key]) symbolMap[key] = { cls: inv.asset_class, ids: [] }
+    if (!symbolMap[key]) {
+      symbolMap[key] = { cls: inv.asset_class, ids: [], querySym: '' }
+    }
     symbolMap[key].ids.push(inv.id)
   }
-
   for (const [sym, info] of Object.entries(symbolMap)) {
-    const querySym = getYahooSymbol(sym, info.cls)
-    const price = await fetchYahooPrice(querySym)
-
-    if (price !== null) {
-      const now = new Date().toISOString()
-      for (const id of info.ids) {
-        const { error } = await supabase
-          .from('investments')
-          .update({ current_price: price, price_updated_at: now })
-          .eq('id', id)
-        if (!error) {
-          const inv = investments.value.find(i => i.id === id)
-          if (inv) { inv.current_price = price; inv.price_updated_at = now }
-        }
-      }
-      successCount++
-    } else {
-      failCount++
-    }
+    info.querySym = getYahooSymbol(sym, info.cls)
   }
+
+  // 2. Fetch ALL prices in ONE batch call (or parallel if batch unavailable)
+  const allQuerySyms = [...new Set(Object.values(symbolMap).map(i => i.querySym))]
+  const priceMap = await fetchYahooPricesBatch(allQuerySyms)  // { querySym -> price }
+
+  // 3. Write results back to Supabase (parallel per symbol group)
+  const now = new Date().toISOString()
+  await Promise.all(
+    Object.values(symbolMap).map(async (info) => {
+      const price = priceMap[info.querySym] ?? null
+      if (price !== null) {
+        // Update all lots under this symbol in parallel
+        await Promise.all(
+          info.ids.map(async (id) => {
+            const { error } = await supabase
+              .from('investments')
+              .update({ current_price: price, price_updated_at: now })
+              .eq('id', id)
+            if (!error) {
+              const inv = investments.value.find(i => i.id === id)
+              if (inv) { inv.current_price = price; inv.price_updated_at = now }
+            }
+          })
+        )
+        successCount++
+      } else {
+        failCount++
+      }
+    })
+  )
 
   lastUpdated.value = new Date()
   if (failCount > 0) {
