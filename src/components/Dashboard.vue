@@ -1,4 +1,4 @@
-<script setup>
+﻿<script setup>
 import { ref, onMounted, onActivated, onUnmounted, computed, watch } from 'vue'
 import { supabase } from '../lib/supabaseClient'
 import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement, Title, Filler, BarElement } from 'chart.js'
@@ -2128,8 +2128,17 @@ const fetchAllData = async () => {
       .order('created_at', { ascending: false })
       
     if (!invsErr && invs) {
-      loadedInvestments = invs
-      localStorage.setItem('local_investments', JSON.stringify(invs))
+      // Safety net: if Supabase returned empty custom_group but local has one, keep local
+      // Guards against race conditions where page refresh outpaces Supabase write
+      const localInvMap = {}
+      JSON.parse(localStorage.getItem('local_investments') || '[]').forEach(i => {
+        if (i.custom_group) localInvMap[i.id] = i.custom_group
+      })
+      loadedInvestments = invs.map(i => ({
+        ...i,
+        custom_group: i.custom_group || localInvMap[i.id] || ''
+      }))
+      localStorage.setItem('local_investments', JSON.stringify(loadedInvestments))
     } else {
       loadedInvestments = JSON.parse(localStorage.getItem('local_investments') || '[]')
     }
@@ -3348,24 +3357,22 @@ const addItemToGroup = async () => {
     accounts.value = accounts.value.map(a => {
       if (a.id === id) {
         a.custom_group = selectedGroupToManage.value
-        if (a.id && !String(a.id).startsWith('local-') && !String(a.id).startsWith('mock-')) {
-          supabase.from('accounts').update({ custom_group: selectedGroupToManage.value }).eq('id', a.id)
-        }
       }
       return a
     })
     localStorage.setItem('local_accounts', JSON.stringify(accounts.value))
+    if (id && !String(id).startsWith('local-') && !String(id).startsWith('mock-')) {
+      await supabase.from('accounts').update({ custom_group: selectedGroupToManage.value }).eq('id', id)
+    }
   } else {
     investments.value = investments.value.map(i => {
-      if (i.id === id) {
-        i.custom_group = selectedGroupToManage.value
-        if (i.id && !String(i.id).startsWith('local-') && !String(i.id).startsWith('mock-')) {
-          supabase.from('investments').update({ custom_group: selectedGroupToManage.value }).eq('id', i.id)
-        }
-      }
+      if (i.id === id) i.custom_group = selectedGroupToManage.value
       return i
     })
     localStorage.setItem('local_investments', JSON.stringify(investments.value))
+    if (id && !String(id).startsWith('local-') && !String(id).startsWith('mock-')) {
+      await supabase.from('investments').update({ custom_group: selectedGroupToManage.value }).eq('id', id)
+    }
   }
   selectedItemToAddToGroup.value = ''
 }
@@ -3375,24 +3382,22 @@ const removeItemFromGroup = async (id, type) => {
     accounts.value = accounts.value.map(a => {
       if (a.id === id) {
         a.custom_group = ''
-        if (a.id && !String(a.id).startsWith('local-') && !String(a.id).startsWith('mock-')) {
-          supabase.from('accounts').update({ custom_group: '' }).eq('id', a.id)
-        }
       }
       return a
     })
     localStorage.setItem('local_accounts', JSON.stringify(accounts.value))
+    if (id && !String(id).startsWith('local-') && !String(id).startsWith('mock-')) {
+      await supabase.from('accounts').update({ custom_group: '' }).eq('id', id)
+    }
   } else {
     investments.value = investments.value.map(i => {
-      if (i.id === id) {
-        i.custom_group = ''
-        if (i.id && !String(i.id).startsWith('local-') && !String(i.id).startsWith('mock-')) {
-          supabase.from('investments').update({ custom_group: '' }).eq('id', i.id)
-        }
-      }
+      if (i.id === id) i.custom_group = ''
       return i
     })
     localStorage.setItem('local_investments', JSON.stringify(investments.value))
+    if (id && !String(id).startsWith('local-') && !String(id).startsWith('mock-')) {
+      await supabase.from('investments').update({ custom_group: '' }).eq('id', id)
+    }
   }
 }
 
