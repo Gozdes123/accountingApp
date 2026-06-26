@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, onActivated, onUnmounted, computed } from 'vue'
+import { ref, onMounted, onActivated, onUnmounted, computed, watch } from 'vue'
 import { supabase } from '../lib/supabaseClient'
 import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement, Title, Filler, BarElement } from 'chart.js'
 import { Doughnut, Line, Bar } from 'vue-chartjs'
@@ -1425,6 +1425,366 @@ const trendRoiSummaryText = computed(() => {
     }
   }
   return summaries
+})
+
+// 各群組真實投資報酬率（給今日快覽卡片用）
+const roiByGroup = computed(() => {
+  const groupMetrics = {}
+
+  investments.value.forEach(item => {
+    const qty = Number(item.quantity || 0)
+    if (qty <= 0 || item.include_in_chart === false) return
+    const cost = Number(item.buy_price || item.average_cost || 0)
+    const current = Number(item.current_price || 0)
+    const currency = item.currency || 'TWD'
+    const grp = item.custom_group || '未分類'
+
+    const isUS = currency === 'USD' || (item.asset_class || '').toLowerCase() === 'us_stock'
+    const costTwd = isUS ? qty * cost * usdTwdRate.value : qty * cost
+    const valTwd = isUS ? qty * current * usdTwdRate.value : qty * current
+
+    if (!groupMetrics[grp]) {
+      groupMetrics[grp] = { cost: 0, val: 0 }
+    }
+    groupMetrics[grp].cost += costTwd
+    groupMetrics[grp].val += valTwd
+  })
+
+  const result = {}
+  for (const [grp, m] of Object.entries(groupMetrics)) {
+    const pnl = m.val - m.cost
+    const roi = m.cost > 0 ? (pnl / m.cost) * 100 : 0
+    result[grp] = { cost: m.cost, val: m.val, pnl, roi }
+  }
+  return result
+})
+
+// ── ROI 歷史走勢圖 ──────────────────────────────────────────────────
+const investmentPriceHistory = ref({}) // { yhSymbol: { dates: string[], closes: number[], isUS: bool, qty: number, ... } }
+const isFetchingRoiHistory = ref(false)
+const roiHistoryError = ref('')
+
+const getRoiHistoryRange = (filter) => {
+  switch (filter) {
+    case '30D': return '1mo'
+    case '6M':  return '6mo'
+    case '1Y':  return '1y'
+    case 'YTD': return 'ytd'
+    case 'ALL': return '2y'
+    default:    return '6mo'
+  }
+}
+
+const fetchHistoricalPricesForSymbol = async (yhSymbol, range) => {
+  const isProd = import.meta.env.PROD
+  const yhUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${yhSymbol}?interval=1d&range=${range}`
+
+  const tryFetch = async (url) => {
+    try {
+      const res = await fetch(url)
+      if (!res.ok) return null
+      const data = await res.json()
+      const result = data?.chart?.result?.[0]
+      if (!result) return null
+      const timestamps = result.timestamp || []
+      const closes = result.indicators?.quote?.[0]?.close || []
+      if (timestamps.length === 0) return null
+      const dates = []
+      const validCloses = []
+      for (let i = 0; i < timestamps.length; i++) {
+        if (closes[i] != null) {
+          const d = new Date(timestamps[i] * 1000)
+          dates.push(d.toISOString().split('T')[0])
+          validCloses.push(closes[i])
+        }
+      }
+      return { dates, closes: validCloses }
+    } catch { return null }
+  }
+
+  if (!isProd) {
+    const r = await tryFetch(`/yahoo-finance/v8/finance/chart/${yhSymbol}?interval=1d&range=${range}`)
+
+    if (r) return r
+  }
+
+  const proxies = [
+    `/api/yahoo-proxy?symbol=${yhSymbol}&range=${range}`,
+    `https://corsproxy.io/?${encodeURIComponent(yhUrl)}`,
+    `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(yhUrl)}`,
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(yhUrl)}`
+  ]
+  for (const proxyUrl of proxies) {
+    const r = await tryFetch(proxyUrl)
+    if (r) return r
+  }
+  return null
+}
+
+const fetchAllRoiHistory = async () => {
+  if (isFetchingRoiHistory.value) return
+  isFetchingRoiHistory.value = true
+  roiHistoryError.value = ''
+
+  const range = getRoiHistoryRange(timeFilter.value)
+  const cacheKey = `roi_price_history_v1_${range}`
+
+  // Try localStorage cache (TTL: 4 hours)
+  try {
+    const cached = localStorage.getItem(cacheKey)
+    if (cached) {
+      const { data, timestamp } = JSON.parse(cached)
+      if (Date.now() - timestamp < 4 * 3600 * 1000) {
+        investmentPriceHistory.value = data
+        isFetchingRoiHistory.value = false
+        return
+      }
+    }
+  } catch {}
+
+  // Build symbol map
+  const symbolMap = {}
+  investments.value.forEach(inv => {
+    if (Number(inv.quantity || 0) <= 0 || inv.include_in_chart === false) return
+    const sym = inv.symbol.toUpperCase()
+    const yhSym = getYahooSymbol(sym, inv.asset_class)
+    if (!symbolMap[yhSym]) symbolMap[yhSym] = { original: sym, assetClass: inv.asset_class }
+  })
+
+  const result = {}
+  for (const [yhSym] of Object.entries(symbolMap)) {
+    const data = await fetchHistoricalPricesForSymbol(yhSym, range)
+    if (data) result[yhSym] = data
+  }
+
+  investmentPriceHistory.value = result
+  try {
+    localStorage.setItem(cacheKey, JSON.stringify({ data: result, timestamp: Date.now() }))
+  } catch {}
+
+  if (Object.keys(result).length === 0) roiHistoryError.value = '暫時無法取得歷史價格資料，請稍後再試'
+  isFetchingRoiHistory.value = false
+}
+
+// ── 歷史 ROI 折線圖資料 ─────────────────────────────────────
+const roiHistoryChartData = computed(() => {
+  const history = investmentPriceHistory.value
+  if (Object.keys(history).length === 0) return null
+
+  // Build price lookup: yhSymbol -> { date -> close }
+  const priceLookup = {}
+  Object.entries(history).forEach(([yhSym, h]) => {
+    priceLookup[yhSym] = {}
+    h.dates.forEach((d, i) => { priceLookup[yhSym][d] = h.closes[i] })
+  })
+
+  // Collect date union from all available symbols
+  const dateSet = new Set()
+  Object.values(history).forEach(h => h.dates.forEach(d => dateSet.add(d)))
+  let dates = Array.from(dateSet).sort()
+
+  // Apply custom date range filter
+  if (timeFilter.value === 'ALL') {
+    dates = dates.filter(d => d >= customStartDate.value && d <= customEndDate.value)
+  }
+  if (dates.length < 2) return null
+
+  // LOCF helpers — build sorted date arrays per symbol
+  const sortedDatesPerSym = {}
+  Object.entries(priceLookup).forEach(([yhSym, priceMap]) => {
+    sortedDatesPerSym[yhSym] = Object.keys(priceMap).sort()
+  })
+
+  // Get last known price on or before a given date (Last Observation Carried Forward)
+  const getLastKnownPrice = (yhSym, date) => {
+    const priceMap = priceLookup[yhSym]
+    if (!priceMap) return null
+    if (priceMap[date] != null) return priceMap[date]
+    const symDates = sortedDatesPerSym[yhSym]
+    let lo = 0, hi = symDates.length - 1, found = null
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1
+      if (symDates[mid] <= date) { found = symDates[mid]; lo = mid + 1 }
+      else hi = mid - 1
+    }
+    return found ? priceMap[found] : null
+  }
+
+  // Build investment list with buy_date
+  const invList = investments.value
+    .filter(inv => Number(inv.quantity || 0) > 0 && inv.include_in_chart !== false)
+    .map(inv => {
+      const sym = inv.symbol.toUpperCase()
+      const yhSym = getYahooSymbol(sym, inv.asset_class)
+      const isUS = (inv.currency || 'TWD') === 'USD' || (inv.asset_class || '').toLowerCase() === 'us_stock'
+      const qty = Number(inv.quantity || 0)
+      const buyPrice = Number(inv.buy_price || inv.average_cost || 0)
+      const costTwd = isUS ? qty * buyPrice * usdTwdRate.value : qty * buyPrice
+      // buy_date prevents ROI from including pre-purchase historical prices
+      const buyDate = inv.buy_date ? inv.buy_date.slice(0, 10) : '1970-01-01'
+      return { yhSym, isUS, qty, costTwd, grp: inv.custom_group || '未分類', buyDate }
+    })
+
+  const allGroupNames = [...new Set(invList.map(inv => inv.grp))]
+  const GROUP_COLORS = ['#7839ec', '#5c67f5', '#2ec173', '#ff9f0a', '#64d2ff', '#bf5af2', '#ff453a', '#a0a0a5']
+
+  if (invList.reduce((s, inv) => s + inv.costTwd, 0) <= 0) return null
+
+  // ROI calculation per date
+  // Key fix: each investment only contributes (both value AND cost) from its buy_date onwards.
+  // This eliminates artificial dips from comparing today's cost basis against pre-purchase prices.
+  const overallRoi = []
+  const groupRoi = {}
+  allGroupNames.forEach(g => { groupRoi[g] = [] })
+
+  dates.forEach(date => {
+    let totalVal = 0
+    let activeCost = 0
+    const groupVal = {}
+    const groupActiveCost = {}
+
+    invList.forEach(inv => {
+      if (date < inv.buyDate) return  // Not purchased yet — exclude from both val and cost
+
+      const price = getLastKnownPrice(inv.yhSym, date)
+      if (price == null) return  // No price data at all for this symbol
+
+      const valTwd = inv.isUS ? inv.qty * price * usdTwdRate.value : inv.qty * price
+      totalVal += valTwd
+      activeCost += inv.costTwd
+      groupVal[inv.grp] = (groupVal[inv.grp] || 0) + valTwd
+      groupActiveCost[inv.grp] = (groupActiveCost[inv.grp] || 0) + inv.costTwd
+    })
+
+    overallRoi.push(activeCost > 0 ? ((totalVal - activeCost) / activeCost) * 100 : null)
+    allGroupNames.forEach(g => {
+      const gCost = groupActiveCost[g] || 0
+      const gVal = groupVal[g] || 0
+      groupRoi[g].push(gCost > 0 ? ((gVal - gCost) / gCost) * 100 : null)
+    })
+  })
+
+  // Trim leading nulls — don't show empty period before any investment existed
+  const firstActiveIdx = overallRoi.findIndex(v => v !== null)
+  if (firstActiveIdx < 0) return null
+  const trimmedDates = dates.slice(firstActiveIdx)
+  const trimmedOverall = overallRoi.slice(firstActiveIdx)
+  const trimmedGroup = {}
+  allGroupNames.forEach(g => { trimmedGroup[g] = groupRoi[g].slice(firstActiveIdx) })
+
+  const labels = trimmedDates.map(d => {
+    const dt = new Date(d + 'T00:00:00')
+    return `${dt.getMonth() + 1}/${dt.getDate()}`
+  })
+
+  const datasets = []
+  datasets.push({
+    label: '整體',
+    data: trimmedOverall,
+    borderColor: '#5c67f5',
+    backgroundColor: 'rgba(0,0,0,0)',
+    borderWidth: 2.5,
+    tension: 0.3,
+    fill: false,
+    spanGaps: true,
+    pointRadius: trimmedDates.length > 40 ? 0 : 2,
+    pointHoverRadius: 5,
+    order: 0
+  })
+  allGroupNames.forEach((grp, idx) => {
+    datasets.push({
+      label: grp,
+      data: trimmedGroup[grp],
+      borderColor: GROUP_COLORS[idx % GROUP_COLORS.length],
+      backgroundColor: 'rgba(0,0,0,0)',
+      borderWidth: 2,
+      tension: 0.3,
+      fill: false,
+      spanGaps: true,
+      pointRadius: trimmedDates.length > 40 ? 0 : 2,
+      pointHoverRadius: 5,
+      order: idx + 1
+    })
+  })
+
+  return { labels, datasets }
+})
+
+const roiHistoryChartOptions = computed(() => ({
+  responsive: true,
+  maintainAspectRatio: false,
+  interaction: { mode: 'index', intersect: false },
+  elements: {
+    line: {
+      fill: false  // Globally disable Filler plugin for all lines in this chart
+    }
+  },
+  plugins: {
+    legend: {
+      display: true,
+      position: 'top',
+      labels: {
+        color: 'var(--color-text)',
+        font: { size: 10, family: 'Inter', weight: 'bold' },
+        boxWidth: 8, boxHeight: 8, padding: 10,
+        usePointStyle: true,
+        pointStyle: 'line'
+      }
+    },
+    tooltip: {
+      backgroundColor: 'rgba(20,20,25,0.97)',
+      titleColor: '#ffffff',
+      bodyColor: '#c0c0cc',
+      borderColor: 'rgba(255,255,255,0.08)',
+      borderWidth: 1,
+      padding: 10,
+      cornerRadius: 10,
+      callbacks: {
+        label: (ctx) => {
+          const v = ctx.parsed.y
+          return ` ${ctx.dataset.label}: ${v >= 0 ? '+' : ''}${v.toFixed(2)}%`
+        }
+      }
+    }
+  },
+  scales: {
+    y: {
+      grid: { color: 'rgba(120,120,140,0.12)' },
+      ticks: {
+        color: 'var(--color-text-muted)',
+        font: { size: 10, family: 'Inter' },
+        callback: (v) => (v >= 0 ? '+' : '') + v.toFixed(1) + '%'
+      }
+    },
+    x: {
+      grid: { display: false },
+      ticks: {
+        color: 'var(--color-text-muted)',
+        font: { size: 10, family: 'Inter' },
+        maxTicksLimit: 8
+      }
+    }
+  }
+}))
+
+// 切換時間篩選器 → 清快取並重新抓取
+watch(timeFilter, () => {
+  investmentPriceHistory.value = {}
+  if (currentTab.value === 'trend') fetchAllRoiHistory()
+})
+
+// 切換到趨勢圖 tab → 確保歷史資料已載入
+watch(currentTab, (tab) => {
+  if (tab === 'trend' && Object.keys(investmentPriceHistory.value).length === 0) {
+    fetchAllRoiHistory()
+  }
+})
+
+// 切換到 ROI tab → 確保歷史資料已載入
+watch(trendType, (type) => {
+  if (type === 'roi' && Object.keys(investmentPriceHistory.value).length === 0) {
+    fetchAllRoiHistory()
+  }
 })
 
 const trendChartData = computed(() => {
@@ -3649,11 +4009,80 @@ onUnmounted(() => {
             </div>
           </template>
           <template v-else>
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 4px 16px; text-align: left;">
-              <div v-for="(val, grp) in trendRoiSummaryText" :key="grp" style="font-size: 0.88rem; font-weight: 700; color: var(--color-text); line-height: 1.5; display: flex; align-items: center; gap: 6px;">
-                <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%;" :style="{ background: getGroupColor(grp) }"></span>
-                {{ val }}
+            <!-- Premium horizontal scrollable chip row -->
+            <div style="display: flex; gap: 8px; overflow-x: auto; padding: 2px 0 4px; -webkit-overflow-scrolling: touch; scrollbar-width: none; -ms-overflow-style: none;">
+
+              <!-- 整體 chip — indigo gradient glass -->
+              <div style="
+                flex-shrink: 0;
+                display: flex;
+                align-items: center;
+                gap: 7px;
+                padding: 6px 14px 6px 10px;
+                border-radius: 24px;
+                background: linear-gradient(135deg, rgba(92,103,245,0.22) 0%, rgba(92,103,245,0.09) 100%);
+                border: 1px solid rgba(92,103,245,0.35);
+                box-shadow: 0 2px 10px rgba(92,103,245,0.18), inset 0 1px 0 rgba(255,255,255,0.1);
+                backdrop-filter: blur(6px);
+              ">
+                <span style="
+                  display: inline-flex;
+                  width: 8px; height: 8px;
+                  border-radius: 50%;
+                  background: #7c86ff;
+                  box-shadow: 0 0 6px 2px rgba(92,103,245,0.6);
+                  flex-shrink: 0;
+                "></span>
+                <span style="font-size: 0.78rem; font-weight: 600; color: rgba(130,140,255,0.9); white-space: nowrap; letter-spacing: 0.02em;">整體</span>
+                <span style="width: 1px; height: 12px; background: rgba(92,103,245,0.4); flex-shrink: 0;"></span>
+                <span style="font-size: 0.92rem; font-weight: 800; white-space: nowrap; letter-spacing: -0.02em;"
+                  :style="{ color: totalInvestmentPnL >= 0 ? '#34d17a' : '#ff6b61' }">
+                  {{ totalInvestmentPnL >= 0 ? '+' : '' }}{{ totalInvestmentPnLPct.toFixed(2) }}%
+                </span>
               </div>
+
+              <!-- Per-group chips -->
+              <div
+                v-for="(metrics, grp) in roiByGroup"
+                :key="'chip-' + grp"
+                style="
+                  flex-shrink: 0;
+                  display: flex;
+                  align-items: center;
+                  gap: 7px;
+                  padding: 6px 14px 6px 10px;
+                  border-radius: 24px;
+                  backdrop-filter: blur(6px);
+                "
+                :style="{
+                  background: metrics.pnl >= 0
+                    ? 'linear-gradient(135deg, rgba(46,189,89,0.20) 0%, rgba(46,189,89,0.07) 100%)'
+                    : 'linear-gradient(135deg, rgba(255,69,58,0.20) 0%, rgba(255,69,58,0.07) 100%)',
+                  border: metrics.pnl >= 0
+                    ? '1px solid rgba(46,189,89,0.35)'
+                    : '1px solid rgba(255,69,58,0.35)',
+                  boxShadow: metrics.pnl >= 0
+                    ? '0 2px 10px rgba(46,189,89,0.15), inset 0 1px 0 rgba(255,255,255,0.08)'
+                    : '0 2px 10px rgba(255,69,58,0.15), inset 0 1px 0 rgba(255,255,255,0.08)'
+                }"
+              >
+                <span
+                  style="display: inline-flex; width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;"
+                  :style="{
+                    background: getGroupColor(grp),
+                    boxShadow: '0 0 6px 2px ' + getGroupColor(grp) + '88'
+                  }"
+                ></span>
+                <span style="font-size: 0.78rem; font-weight: 600; white-space: nowrap; max-width: 72px; overflow: hidden; text-overflow: ellipsis; letter-spacing: 0.02em;"
+                  :style="{ color: metrics.pnl >= 0 ? 'rgba(52,209,122,0.85)' : 'rgba(255,107,97,0.85)' }">{{ grp }}</span>
+                <span style="width: 1px; height: 12px; flex-shrink: 0;"
+                  :style="{ background: metrics.pnl >= 0 ? 'rgba(46,189,89,0.4)' : 'rgba(255,69,58,0.4)' }"></span>
+                <span style="font-size: 0.92rem; font-weight: 800; white-space: nowrap; letter-spacing: -0.02em;"
+                  :style="{ color: metrics.pnl >= 0 ? '#34d17a' : '#ff6b61' }">
+                  {{ metrics.roi >= 0 ? '+' : '' }}{{ metrics.roi.toFixed(2) }}%
+                </span>
+              </div>
+
             </div>
           </template>
         </div>
@@ -3687,9 +4116,35 @@ onUnmounted(() => {
         </div>
 
         <!-- Line Chart Container -->
-        <div style="height: 260px; position: relative; margin-bottom: 32px;">
-          <Line :data="trendChartData" :options="trendChartOptions" />
-        </div>
+        <template v-if="trendType !== 'roi'">
+          <div style="height: 260px; position: relative; margin-bottom: 32px;">
+            <Line :data="trendChartData" :options="trendChartOptions" />
+          </div>
+        </template>
+
+        <!-- ROI Mode: Real Historical Chart -->
+        <template v-else>
+          <!-- Loading -->
+          <div v-if="isFetchingRoiHistory && !roiHistoryChartData" style="height: 220px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); border-radius: 16px; margin-bottom: 32px;">
+            <div class="loading-spinner" style="width: 22px; height: 22px; border-width: 3px;"></div>
+            <span style="font-size: 0.8rem; color: var(--color-text-muted);">正在從 Yahoo Finance 取得歷史資料…</span>
+          </div>
+          <!-- Error -->
+          <div v-else-if="roiHistoryError && !roiHistoryChartData" style="padding: 18px; background: rgba(255,69,58,0.07); border: 1px solid rgba(255,69,58,0.2); border-radius: 14px; font-size: 0.82rem; color: #ff6b61; text-align: center; margin-bottom: 32px;">
+            ⚠️ {{ roiHistoryError }}
+            <button @click="investmentPriceHistory = {}; fetchAllRoiHistory()" style="display: block; margin: 10px auto 0; font-size: 0.78rem; padding: 5px 14px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.15); color: var(--color-text); border-radius: 8px; cursor: pointer;">重試</button>
+          </div>
+          <!-- Real ROI Chart -->
+          <div v-else-if="roiHistoryChartData" style="height: 260px; position: relative; margin-bottom: 24px;">
+            <Line :data="roiHistoryChartData" :options="roiHistoryChartOptions" />
+          </div>
+          <!-- No data yet -->
+          <div v-else style="height: 160px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.07); border-radius: 16px; margin-bottom: 32px;">
+            <span style="font-size: 1.5rem;">📊</span>
+            <span style="font-size: 0.82rem; color: var(--color-text-muted);">點擊右上角「更新」載入歷史報酬率走勢</span>
+            <button @click="fetchAllRoiHistory()" style="font-size: 0.78rem; padding: 6px 16px; background: rgba(120,57,236,0.2); border: 1px solid rgba(120,57,236,0.4); color: #a87af5; border-radius: 8px; cursor: pointer; margin-top: 4px;">立即載入</button>
+          </div>
+        </template>
 
         <!-- Custom Date Picker Row -->
         <div v-if="timeFilter === 'ALL'" style="display: flex; gap: 12px; align-items: center; margin-bottom: 20px; padding: 0 4px; width: 100%; box-sizing: border-box;">
@@ -3731,6 +4186,23 @@ onUnmounted(() => {
             {{ time.label }}
           </button>
         </div>
+
+        <!-- ── 投資報酬率快速更新按鈕（僅 roi 模式顯示）──────────── -->
+        <div v-if="trendType === 'roi' && groupedInvestments.length > 0" style="margin-bottom: 20px; display: flex; justify-content: flex-end;">
+          <button
+            @click="investmentPriceHistory = {}; fetchAllRoiHistory()"
+            :disabled="isFetchingRoiHistory"
+            style="display: flex; align-items: center; gap: 5px; background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.12); color: var(--color-text-muted); padding: 6px 14px; border-radius: 10px; font-size: 0.75rem; font-weight: 600; cursor: pointer;"
+          >
+            <svg :class="{ spin: isFetchingRoiHistory }" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+            </svg>
+            {{ isFetchingRoiHistory ? '載入中…' : '更新歷史資料' }}
+          </button>
+        </div>
+
+
+
 
         <!-- Bottom spacer to prevent overlap with floating BottomNav -->
         <div style="height: 110px; flex-shrink: 0;"></div>

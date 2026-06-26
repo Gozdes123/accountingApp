@@ -61,14 +61,15 @@ export default async function handler(req, res) {
     }
   }
 
-  // ── Single mode: ?symbol=AAPL (backward compatible) ─────────────
+  // ── Single mode: ?symbol=AAPL&range=6mo (backward compatible) ────
   if (!symbol) {
     res.status(400).json({ error: 'symbol or symbols parameter is required' });
     return;
   }
 
   try {
-    const yhUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=1d`;
+    const range = req.query.range || '1d';
+    const yhUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=${encodeURIComponent(range)}`;
     const response = await fetch(yhUrl, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
