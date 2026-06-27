@@ -40,10 +40,12 @@
 
 ## 📁 專案架構與關鍵檔案
 
-- **[src/components/Dashboard.vue](file:///e:/code/accounting_app/src/components/Dashboard.vue)**: 核心 SPA 元件，承載 90% 的前端邏輯（狀態、圖表配置、Supabase CRUD、Yahoo 報價拉取）。
+- **[src/components/Dashboard.vue](file:///e:/code/accounting_app/src/components/Dashboard.vue)**: 核心 SPA 元件，承載 **100% 的前端主要業務邏輯**（狀態、圖表配置、Supabase CRUD、Yahoo 報價拉取）。
+- **[src/components/BottomNav.vue](file:///e:/code/accounting_app/src/components/BottomNav.vue)**: 底部導覽列元件，唯一與 Dashboard 連動的元件。
+- **其他 `src/components/*.vue` (如 `Assets.vue`, `Investments.vue` 等)**: ⚠️ **注意：這些均為早期開發或重構留下的未使用元件，目前完全沒有被 App 載入，請勿修改它們！所有功能修改與業務邏輯均應在 `Dashboard.vue` 中進行。**
 - **[api/yahoo-proxy.js](file:///e:/code/accounting_app/api/yahoo-proxy.js)**: Vercel 運行的後端 API 代理，處理 Yahoo Finance API 的跨域請求。
 - **[src/lib/supabaseClient.js](file:///e:/code/accounting_app/src/lib/supabaseClient.js)**: Supabase 初始化客戶端。
-- **[supabase_setup.sql](file:///e:/code/accounting_app/supabase_setup.sql)**: 包含 Supabase 資料表（`accounts`, `investments`, `net_worth_history`, `income_expense`）的資料表綱要。
+- **[supabase_setup.sql](file:///e:/code/accounting_app/supabase_setup.sql)**: 包含 Supabase 資料表（`accounts`, `investments`, `net_worth_history`）的資料表綱要。收支設定直接儲存於 `accounts` 的 `auto_record` (JSONB) 欄位中。
 
 ---
 

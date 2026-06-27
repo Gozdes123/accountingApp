@@ -19,3 +19,19 @@ As an agentic coder working on this codebase, you must adhere to these structura
 ## 4. Group State Persistence (Safety Net)
 - **Database Race Conditions**: Group additions use Supabase writes. Because page reloads might catch Supabase before the async write finishes, always query the local `localStorage` map (e.g., `localInvMap`) to merge back `custom_group` settings if Supabase returns empty strings.
 - **No Form Resets**: In `selectSubtype`, do not clear `newAsset.value.custom_group`. Maintain the inherited `activeCustomGroup.value` so the asset category modal flow works properly.
+
+## 5. Dashboard.vue (7,200+ Lines) Development Guide
+- **Do NOT attempt to rewrite the entire `Dashboard.vue` file** in one output. Doing so will exceed the AI's output tokens. Use target line edits (e.g. search-and-replace tool) to replace specific blocks.
+- **Ignore Unused Components**: Ignore files like `Assets.vue`, `Investments.vue`, `Transactions.vue`, `QuickAdd.vue`, `ExpenseList.vue` unless explicitly asked to refactor them. Only edit `Dashboard.vue` and `BottomNav.vue`.
+- **Key State Reference**:
+  - `accounts`: Array of liquid/liability accounts.
+  - `investments`: Array of stock/crypto holding lots.
+  - `usdTwdRate`: Currency conversion rate.
+  - `activeCustomGroup`: Current filtering custom group (e.g. '台股', '美股').
+- **Key Chart Computed Properties**:
+  - `roiHistoryChartData`: Computes the historical ROI timeline.
+  - `trendChartData`: Computes the overall Net Worth history chart.
+  - `statsChartData`: Computes monthly Income vs Expenses.
+- **Key Sync Functions**:
+  - `fetchAllData()`: Triggers SWR flow, merges Supabase with local cache mapping (`localInvMap`).
+
