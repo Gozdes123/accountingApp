@@ -1,4 +1,4 @@
-﻿<script setup>
+<script setup>
 import { ref, onMounted, onActivated, onUnmounted, computed, watch } from 'vue'
 import { supabase } from '../lib/supabaseClient'
 import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement, Title, Filler, BarElement } from 'chart.js'
@@ -3331,12 +3331,12 @@ const submitCreateGroup = () => {
 // Manage Group Modal State
 const showManageGroupModal = ref(false)
 const selectedGroupToManage = ref('')
-const selectedItemToAddToGroup = ref('')
+const selectedItemsToAddToGroup = ref([]) // Array of selected JSON string representations
 
 const manageGroup = (groupName, type) => {
   activeGroupType.value = type
   selectedGroupToManage.value = groupName
-  selectedItemToAddToGroup.value = ''
+  selectedItemsToAddToGroup.value = []
   showManageGroupModal.value = true
 }
 
@@ -3348,33 +3348,48 @@ const getAvailableItemsForGroup = computed(() => {
   }
 })
 
-const addItemToGroup = async () => {
-  if (!selectedItemToAddToGroup.value) return
-  const itemJson = JSON.parse(selectedItemToAddToGroup.value)
-  const { id, type } = itemJson
+const addSelectedItemsToGroup = async () => {
+  if (selectedItemsToAddToGroup.value.length === 0) return
+  
+  const parsedItems = selectedItemsToAddToGroup.value.map(jsonStr => JSON.parse(jsonStr))
+  const accountIds = parsedItems.filter(item => item.type === 'account').map(item => item.id)
+  const investmentIds = parsedItems.filter(item => item.type === 'investment').map(item => item.id)
 
-  if (type === 'account') {
+  if (accountIds.length > 0) {
     accounts.value = accounts.value.map(a => {
-      if (a.id === id) {
+      if (accountIds.includes(a.id)) {
         a.custom_group = selectedGroupToManage.value
       }
       return a
     })
     localStorage.setItem('local_accounts', JSON.stringify(accounts.value))
-    if (id && !String(id).startsWith('local-') && !String(id).startsWith('mock-')) {
-      await supabase.from('accounts').update({ custom_group: selectedGroupToManage.value }).eq('id', id)
+    
+    const dbAccountIds = accountIds.filter(id => !String(id).startsWith('local-') && !String(id).startsWith('mock-'))
+    if (dbAccountIds.length > 0) {
+      await Promise.all(dbAccountIds.map(id => 
+        supabase.from('accounts').update({ custom_group: selectedGroupToManage.value }).eq('id', id)
+      ))
     }
-  } else {
+  }
+
+  if (investmentIds.length > 0) {
     investments.value = investments.value.map(i => {
-      if (i.id === id) i.custom_group = selectedGroupToManage.value
+      if (investmentIds.includes(i.id)) {
+        i.custom_group = selectedGroupToManage.value
+      }
       return i
     })
     localStorage.setItem('local_investments', JSON.stringify(investments.value))
-    if (id && !String(id).startsWith('local-') && !String(id).startsWith('mock-')) {
-      await supabase.from('investments').update({ custom_group: selectedGroupToManage.value }).eq('id', id)
+    
+    const dbInvestmentIds = investmentIds.filter(id => !String(id).startsWith('local-') && !String(id).startsWith('mock-'))
+    if (dbInvestmentIds.length > 0) {
+      await Promise.all(dbInvestmentIds.map(id => 
+        supabase.from('investments').update({ custom_group: selectedGroupToManage.value }).eq('id', id)
+      ))
     }
   }
-  selectedItemToAddToGroup.value = ''
+  
+  selectedItemsToAddToGroup.value = []
 }
 
 const removeItemFromGroup = async (id, type) => {
@@ -5303,20 +5318,112 @@ onUnmounted(() => {
           </button>
         </div>
 
-        <!-- Add item to group -->
-        <div style="display: flex; flex-direction: column; gap: 0.5rem; background: rgba(0,0,0,0.02); padding: 1rem; border-radius: 12px; box-sizing: border-box;">
-          <label style="font-size: 0.85rem; color: var(--color-text); font-weight: bold; text-align: left; display: block;">加到群組</label>
-          <div style="display: flex; gap: 8px; width: 100%; box-sizing: border-box;">
-            <select v-model="selectedItemToAddToGroup" style="flex: 1; height: 40px; padding: 0 10px; border-radius: 10px; border: 1px solid rgba(0,0,0,0.08); background: white; color: var(--color-text); font-size: 0.9rem; outline: none; width: 70%; min-width: 0;">
-              <option value="" disabled>-- 選擇要加入的項目 --</option>
-              <option v-for="item in getAvailableItemsForGroup" :key="item.id" :value="JSON.stringify({id: item.id, type: item.type})">
+        <!-- Add items to group (Premium Checkbox List) -->
+        <div style="display: flex; flex-direction: column; gap: 0.8rem; background: var(--color-bg-alt, rgba(0,0,0,0.015)); padding: 1.2rem; border-radius: 16px; border: 1px solid rgba(0,0,0,0.03); box-sizing: border-box;">
+          <label style="font-size: 0.85rem; color: var(--color-text); font-weight: 800; text-align: left; display: block; letter-spacing: 0.02em;">選擇要加入的項目</label>
+          
+          <!-- Scrollable Checkbox List -->
+          <div style="
+            max-height: 180px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            padding: 2px 4px 2px 2px;
+            box-sizing: border-box;
+          ">
+            <div v-if="getAvailableItemsForGroup.length === 0" style="text-align: center; color: var(--color-text-muted); font-size: 0.85rem; padding: 2rem 0; opacity: 0.7; font-weight: 600;">
+              🎉 所有項目都已在此群組中
+            </div>
+            
+            <div 
+              v-else 
+              v-for="item in getAvailableItemsForGroup" 
+              :key="item.id" 
+              style="
+                display: flex !important;
+                align-items: center !important;
+                justify-content: flex-start !important;
+                gap: 12px !important;
+                padding: 10px 14px !important;
+                border-radius: 12px !important;
+                background: var(--color-card-bg, #ffffff) !important;
+                border: 1px solid rgba(0,0,0,0.06) !important;
+                box-shadow: 0 1px 3px rgba(0,0,0,0.01) !important;
+                transition: all 0.2s ease !important;
+                box-sizing: border-box !important;
+                width: 100% !important;
+              "
+              onmouseover="this.style.transform='translateY(-1px)'; this.style.borderColor='rgba(92,103,245,0.35)'; this.style.boxShadow='0 4px 12px rgba(0,0,0,0.03)';"
+              onmouseout="this.style.transform='none'; this.style.borderColor='rgba(0,0,0,0.06)'; this.style.boxShadow='0 1px 3px rgba(0,0,0,0.01)';"
+            >
+              <input 
+                type="checkbox" 
+                :id="'group-item-' + item.id"
+                :value="JSON.stringify({id: item.id, type: item.type})" 
+                v-model="selectedItemsToAddToGroup"
+                style="
+                  width: 18px !important;
+                  height: 18px !important;
+                  border-radius: 6px !important;
+                  border: 1.5px solid rgba(0,0,0,0.15) !important;
+                  cursor: pointer !important;
+                  accent-color: #5c67f5 !important;
+                  flex-shrink: 0 !important;
+                  margin: 0 !important;
+                "
+              />
+              <label 
+                :for="'group-item-' + item.id"
+                style="
+                  font-weight: 600 !important;
+                  font-size: 0.88rem !important;
+                  color: var(--color-text) !important;
+                  cursor: pointer !important;
+                  text-align: left !important;
+                  white-space: nowrap !important;
+                  overflow: hidden !important;
+                  text-overflow: ellipsis !important;
+                  flex: 1 !important;
+                  min-width: 0 !important;
+                  margin: 0 !important;
+                  padding: 0 !important;
+                  background: transparent !important;
+                  border: none !important;
+                  display: inline-block !important;
+                "
+              >
                 {{ item.name }}
-              </option>
-            </select>
-            <button @click="addItemToGroup" style="height: 40px; padding: 0 16px; background: var(--color-primary); color: white; border: none; font-weight: bold; border-radius: 10px; cursor: pointer; flex-shrink: 0;" :disabled="!selectedItemToAddToGroup">
-              加入
-            </button>
+              </label>
+            </div>
           </div>
+
+          <button 
+            @click="addSelectedItemsToGroup" 
+            style="
+              height: 42px;
+              width: 100%;
+              background: linear-gradient(135deg, #5c67f5 0%, #4650d1 100%);
+              color: white;
+              border: none;
+              font-weight: 800;
+              font-size: 0.9rem;
+              border-radius: 12px;
+              cursor: pointer;
+              box-shadow: 0 4px 15px rgba(92,103,245,0.25);
+              transition: all 0.2s ease;
+            "
+            :style="{ 
+              opacity: selectedItemsToAddToGroup.length === 0 ? 0.5 : 1, 
+              cursor: selectedItemsToAddToGroup.length === 0 ? 'not-allowed' : 'pointer',
+              boxShadow: selectedItemsToAddToGroup.length === 0 ? 'none' : '0 4px 15px rgba(92,103,245,0.25)'
+            }"
+            :disabled="selectedItemsToAddToGroup.length === 0"
+            onmouseover="if(!this.disabled) { this.style.transform='translateY(-1px)'; this.style.boxShadow='0 6px 20px rgba(92,103,245,0.35)'; }"
+            onmouseout="this.style.transform='none'; this.style.boxShadow=this.disabled ? 'none' : '0 4px 15px rgba(92,103,245,0.25)';"
+          >
+            加入已選項目 ({{ selectedItemsToAddToGroup.length }})
+          </button>
         </div>
 
         <!-- Current Members List -->
