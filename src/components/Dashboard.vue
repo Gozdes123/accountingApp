@@ -745,7 +745,8 @@ const submitAdjustShares = async () => {
         buy_price: buyPrice,
         buy_date: new Date().toISOString().split('T')[0],
         created_at: nowStr,
-        price_updated_at: nowStr
+        price_updated_at: nowStr,
+        custom_group: lots[0].custom_group || ''
       }
       try {
         const dbPayload = { ...payload }
@@ -2306,6 +2307,82 @@ const fetchYahooPrice = async (symbol) => {
   }
 }
 
+const fetchYahooPricesBatch = async (symbols) => {
+  if (!symbols || symbols.length === 0) return {}
+  
+  const isProd = import.meta.env.PROD
+  const symbolsQueryStr = symbols.join(',')
+  
+  // 1. Try primary batch proxy (Vercel Proxy in Prod, local dev proxy in Dev)
+  const proxyUrl = isProd 
+    ? `/api/yahoo-proxy?symbols=${encodeURIComponent(symbolsQueryStr)}`
+    : `/yahoo-finance/v7/finance/quote?symbols=${encodeURIComponent(symbolsQueryStr)}&fields=regularMarketPrice,currency,shortName`
+    
+  try {
+    const res = await fetch(proxyUrl)
+    if (res.ok) {
+      const data = await res.json()
+      if (isProd) {
+        if (data && data.prices) {
+          return data.prices
+        }
+      } else {
+        const prices = {}
+        const quotes = data?.quoteResponse?.result ?? []
+        for (const q of quotes) {
+          if (q.symbol && q.regularMarketPrice != null) {
+            prices[q.symbol] = q.regularMarketPrice
+          }
+        }
+        return prices
+      }
+    }
+  } catch (err) {
+    console.warn('Batch fetch from main proxy failed, trying fallbacks:', err)
+  }
+
+  // 2. Try Fallback CORS proxies
+  const yhQuoteUrl = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(symbolsQueryStr)}&fields=regularMarketPrice,currency,shortName`
+  const fallbackProxies = [
+    `https://corsproxy.io/?${encodeURIComponent(yhQuoteUrl)}`,
+    `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(yhQuoteUrl)}`,
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(yhQuoteUrl)}`
+  ]
+
+  for (const fProxy of fallbackProxies) {
+    try {
+      const res = await fetch(fProxy)
+      if (res.ok) {
+        const data = await res.json()
+        const prices = {}
+        const quotes = data?.quoteResponse?.result ?? []
+        for (const q of quotes) {
+          if (q.symbol && q.regularMarketPrice != null) {
+            prices[q.symbol] = q.regularMarketPrice
+          }
+        }
+        if (Object.keys(prices).length > 0) {
+          return prices
+        }
+      }
+    } catch (err) {
+      console.warn(`Fallback proxy ${fProxy} failed:`, err)
+    }
+  }
+
+  // 3. Last resort fallback: parallel single fetches
+  console.warn('All batch proxies failed, executing parallel single fetches as fallback')
+  const prices = {}
+  const promises = symbols.map(async (sym) => {
+    const price = await fetchYahooPrice(sym)
+    if (price !== null) {
+      prices[sym] = price
+    }
+  })
+  await Promise.all(promises)
+  return prices
+}
+
 const validateSymbol = async () => {
   const sym = newAsset.value.symbol ? newAsset.value.symbol.trim().toUpperCase() : ''
   if (!sym) {
@@ -2351,6 +2428,13 @@ const validateSymbol = async () => {
       if (!newAsset.value.buy_price || Number(newAsset.value.buy_price) === 0) {
         newAsset.value.buy_price = price
       }
+      // Auto fill custom group if empty
+      if (!newAsset.value.custom_group) {
+        const existingLot = investments.value.find(i => i.symbol && i.symbol.toUpperCase() === sym && i.custom_group)
+        if (existingLot) {
+          newAsset.value.custom_group = existingLot.custom_group
+        }
+      }
     } else {
       verificationResult.value = { success: false, msg: '無法取得價格，可手動輸入' }
     }
@@ -2365,37 +2449,68 @@ const refreshPrices = async () => {
   if (isRefreshing.value) return
   isRefreshing.value = true
   
-  let count = 0
-  const symbolMap = {}
+  // 1. Group investments by their Yahoo symbols
+  const yahooToLocalMap = {} // YahooSymbol -> { localSym, assetClass, ids: [] }
   investments.value.forEach(inv => {
-    const key = inv.symbol.toUpperCase()
-    if (!symbolMap[key]) symbolMap[key] = { cls: inv.asset_class, ids: [] }
-    symbolMap[key].ids.push(inv.id)
+    const localSym = inv.symbol.toUpperCase()
+    const yhSym = getYahooSymbol(localSym, inv.asset_class)
+    if (!yahooToLocalMap[yhSym]) {
+      yahooToLocalMap[yhSym] = {
+        localSym,
+        assetClass: inv.asset_class,
+        ids: []
+      }
+    }
+    yahooToLocalMap[yhSym].ids.push(inv.id)
   })
 
-  for (const [sym, info] of Object.entries(symbolMap)) {
-    const querySym = getYahooSymbol(sym, info.cls)
-    const price = await fetchYahooPrice(querySym)
-    if (price !== null) {
-      const now = new Date().toISOString()
-      for (const id of info.ids) {
-        try {
-          await supabase
-            .from('investments')
-            .update({ current_price: price, price_updated_at: now })
-            .eq('id', id)
-        } catch {}
-        
-        const item = investments.value.find(i => i.id === id)
-        if (item) { item.current_price = price; item.price_updated_at = now }
-      }
-      count++
-    }
+  const yahooSymbols = Object.keys(yahooToLocalMap)
+  if (yahooSymbols.length === 0) {
+    isRefreshing.value = false
+    return
   }
-  
-  localStorage.setItem('local_investments', JSON.stringify(investments.value))
-  isRefreshing.value = false
-  await saveDailySnapshot(netWorth.value)
+
+  try {
+    const prices = await fetchYahooPricesBatch(yahooSymbols)
+    const now = new Date().toISOString()
+    const dbUpdates = []
+
+    for (const [yhSym, price] of Object.entries(prices)) {
+      if (price !== null && price !== undefined) {
+        const info = yahooToLocalMap[yhSym]
+        if (!info) continue
+
+        for (const id of info.ids) {
+          // Queue Supabase update
+          dbUpdates.push(
+            supabase
+              .from('investments')
+              .update({ current_price: price, price_updated_at: now })
+              .eq('id', id)
+          )
+
+          // Update local reactive state immediately
+          const item = investments.value.find(i => i.id === id)
+          if (item) {
+            item.current_price = price
+            item.price_updated_at = now
+          }
+        }
+      }
+    }
+
+    // Run Supabase updates concurrently
+    if (dbUpdates.length > 0) {
+      await Promise.allSettled(dbUpdates)
+    }
+
+    localStorage.setItem('local_investments', JSON.stringify(investments.value))
+    await saveDailySnapshot(netWorth.value)
+  } catch (error) {
+    console.error('Error refreshing prices in batch:', error)
+  } finally {
+    isRefreshing.value = false
+  }
 }
 
 // ── Accordion Handlers for Modal ──────────────────────────────────
@@ -2482,6 +2597,15 @@ const addAssetItem = async () => {
       }
       localStorage.setItem('excluded_investments_ids', JSON.stringify(excludedInvs))
 
+      let customGroup = newAsset.value.custom_group || ''
+      if (!isEditing.value && !customGroup && newAsset.value.symbol) {
+        const symUpper = newAsset.value.symbol.toUpperCase()
+        const existingLot = investments.value.find(i => i.symbol && i.symbol.toUpperCase() === symUpper && i.custom_group)
+        if (existingLot) {
+          customGroup = existingLot.custom_group
+        }
+      }
+
       const payload = {
         id: itemId,
         asset_class: newAsset.value.type, // Stock, Crypto, Fund
@@ -2498,7 +2622,7 @@ const addAssetItem = async () => {
         buy_date: newAsset.value.buy_date,
         created_at: isEditing.value ? (investments.value.find(i => i.id === editingId.value)?.created_at || nowStr) : nowStr,
         price_updated_at: nowStr,
-        custom_group: newAsset.value.custom_group || '',
+        custom_group: customGroup,
         funding_account_id: newAsset.value.funding_account_id || null,
         include_in_chart: newAsset.value.include_in_chart !== false
       }
@@ -3118,6 +3242,10 @@ const processAutoRecords = async () => {
                 const nowStr = new Date().toISOString()
                 const generatedId = 'local-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9)
                 
+                const existingGroup = investments.value.find(
+                  i => i.symbol && i.symbol.toUpperCase() === symbol.toUpperCase() && i.custom_group
+                )?.custom_group
+
                 const payload = {
                   id: generatedId,
                   asset_class: /^\d{4,6}$/.test(symbol) ? 'tw_stock' : 'stock',
@@ -3133,7 +3261,7 @@ const processAutoRecords = async () => {
                   created_at: nowStr,
                   price_updated_at: nowStr,
                   funding_account_id: acc.id,
-                  custom_group: '',
+                  custom_group: existingGroup || '',
                   include_in_chart: true
                 }
                 
