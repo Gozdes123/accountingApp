@@ -302,6 +302,7 @@ const cancelDelete = () => {
 }
 
 const isTreeView = ref(false)
+const hoveredGroup = ref(null)
 
 const listExpanded = ref({
   liquid: false,
@@ -1273,7 +1274,7 @@ const filteredHistory = computed(() => {
   return historyRecords.value
 })
 
-// 雙模式走勢數據計算 (結合當前實際比例與歷史淨值)
+// 雙模式走勢數據計算 (結合當前實際比例與歷史淨值，採用固定資產與負債視為常數之優化算法)
 const trendDatasets = computed(() => {
   const history = filteredHistory.value
   if (history.length === 0) return []
@@ -1282,16 +1283,16 @@ const trendDatasets = computed(() => {
   const todayLiabilities = totalLiabilities.value
   const todayLiquid = totalLiquidAssets.value
   const todayInvest = totalInvestments.value
+  const todayFixed = totalFixedAssets.value
+  const todayReceivables = totalReceivables.value
   
-  const totalAssets = todayNetWorth + todayLiabilities
-  const liabRatio = totalAssets > 0 ? todayLiabilities / totalAssets : 0
-  const nwRatio = totalAssets > 0 ? todayNetWorth / totalAssets : 1
-  
-  const liquidRatio = totalAssets > 0 ? todayLiquid / totalAssets : 0.5
-  const investRatio = totalAssets > 0 ? todayInvest / totalAssets : 0.5
+  // 計算流動資金與投資部位之間的分配比例
+  const totalLiquidInvest = todayLiquid + todayInvest
+  const liquidRatio = totalLiquidInvest > 0 ? todayLiquid / totalLiquidInvest : 0.5
+  const investRatio = totalLiquidInvest > 0 ? todayInvest / totalLiquidInvest : 0.5
   
   return history.map((r, idx) => {
-    // 預估歷史節點數值，最後一個節點強制符合當前真實數據
+    // 最後一個節點強制符合當前真實數據
     if (idx === history.length - 1) {
       return {
         date: r.date,
@@ -1302,18 +1303,16 @@ const trendDatasets = computed(() => {
       }
     }
     
-    // 計算該歷史節點的資產總值與正資產總值
-    const estTotalAssets = r.amount / (nwRatio || 1)
-    const estLiabilities = Math.abs(estTotalAssets * liabRatio)
-    
-    const estTotalPos = r.amount + estLiabilities
-    const estLiquid = estTotalPos * liquidRatio
-    const estInvest = estTotalPos * investRatio
+    // 方案 A：將固定資產與負債視為歷史常數，將淨資產歷史波動100%反映於可支配流動部位
+    // 估算歷史上的可支配部位 (流動資金 + 投資部位)
+    const estLiquidInvest = Math.max(0, r.amount + todayLiabilities - todayFixed - todayReceivables)
+    const estLiquid = estLiquidInvest * liquidRatio
+    const estInvest = estLiquidInvest * investRatio
     
     return {
       date: r.date,
       netWorth: r.amount,
-      liabilities: estLiabilities,
+      liabilities: todayLiabilities, // 負債視為常數
       liquid: estLiquid,
       invest: estInvest
     }
@@ -1696,7 +1695,7 @@ const roiHistoryChartData = computed(() => {
     datasets.push({
       label: grp,
       data: trimmedGroup[grp],
-      borderColor: GROUP_COLORS[idx % GROUP_COLORS.length],
+      borderColor: getGroupColor(grp),
       backgroundColor: 'rgba(0,0,0,0)',
       borderWidth: 2,
       tension: 0.3,
@@ -4161,30 +4160,41 @@ onUnmounted(() => {
             <div style="display: flex; gap: 8px; overflow-x: auto; padding: 2px 0 4px; -webkit-overflow-scrolling: touch; scrollbar-width: none; -ms-overflow-style: none;">
 
               <!-- 整體 chip — indigo gradient glass -->
-              <div style="
-                flex-shrink: 0;
-                display: flex;
-                align-items: center;
-                gap: 7px;
-                padding: 6px 14px 6px 10px;
-                border-radius: 24px;
-                background: linear-gradient(135deg, rgba(92,103,245,0.22) 0%, rgba(92,103,245,0.09) 100%);
-                border: 1px solid rgba(92,103,245,0.35);
-                box-shadow: 0 2px 10px rgba(92,103,245,0.18), inset 0 1px 0 rgba(255,255,255,0.1);
-                backdrop-filter: blur(6px);
-              ">
+              <div 
+                @mouseenter="hoveredGroup = 'overall'"
+                @mouseleave="hoveredGroup = null"
+                style="
+                  flex-shrink: 0;
+                  display: flex;
+                  align-items: center;
+                  gap: 7px;
+                  padding: 6px 14px 6px 10px;
+                  border-radius: 24px;
+                  backdrop-filter: blur(8px);
+                  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+                  cursor: pointer;
+                "
+                :style="{
+                  background: hoveredGroup === 'overall' ? 'rgba(92, 103, 245, 0.08)' : 'transparent',
+                  border: hoveredGroup === 'overall' ? '1px solid rgba(92, 103, 245, 0.4)' : '1px solid rgba(92, 103, 245, 0.18)',
+                  boxShadow: hoveredGroup === 'overall' 
+                    ? '0 6px 16px rgba(92, 103, 245, 0.18)' 
+                    : 'none',
+                  transform: hoveredGroup === 'overall' ? 'translateY(-2px)' : 'translateY(0)'
+                }"
+              >
                 <span style="
                   display: inline-flex;
                   width: 8px; height: 8px;
                   border-radius: 50%;
-                  background: #7c86ff;
-                  box-shadow: 0 0 6px 2px rgba(92,103,245,0.6);
+                  background: #5c67f5;
+                  box-shadow: 0 0 6px rgba(92, 103, 245, 0.4);
                   flex-shrink: 0;
                 "></span>
-                <span style="font-size: 0.78rem; font-weight: 600; color: rgba(130,140,255,0.9); white-space: nowrap; letter-spacing: 0.02em;">整體</span>
-                <span style="width: 1px; height: 12px; background: rgba(92,103,245,0.4); flex-shrink: 0;"></span>
+                <span style="font-size: 0.78rem; font-weight: 700; color: var(--color-text); opacity: 0.85; white-space: nowrap; letter-spacing: 0.02em;">整體</span>
+                <span style="width: 1px; height: 12px; background: rgba(92, 103, 245, 0.15); flex-shrink: 0;"></span>
                 <span style="font-size: 0.92rem; font-weight: 800; white-space: nowrap; letter-spacing: -0.02em;"
-                  :style="{ color: totalInvestmentPnL >= 0 ? '#34d17a' : '#ff6b61' }">
+                  :style="{ color: totalInvestmentPnL >= 0 ? 'var(--color-success)' : 'var(--color-danger)' }">
                   {{ totalInvestmentPnL >= 0 ? '+' : '' }}{{ totalInvestmentPnLPct.toFixed(2) }}%
                 </span>
               </div>
@@ -4193,6 +4203,8 @@ onUnmounted(() => {
               <div
                 v-for="(metrics, grp) in roiByGroup"
                 :key="'chip-' + grp"
+                @mouseenter="hoveredGroup = grp"
+                @mouseleave="hoveredGroup = null"
                 style="
                   flex-shrink: 0;
                   display: flex;
@@ -4200,33 +4212,32 @@ onUnmounted(() => {
                   gap: 7px;
                   padding: 6px 14px 6px 10px;
                   border-radius: 24px;
-                  backdrop-filter: blur(6px);
+                  backdrop-filter: blur(8px);
+                  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+                  cursor: pointer;
                 "
                 :style="{
-                  background: metrics.pnl >= 0
-                    ? 'linear-gradient(135deg, rgba(46,189,89,0.20) 0%, rgba(46,189,89,0.07) 100%)'
-                    : 'linear-gradient(135deg, rgba(255,69,58,0.20) 0%, rgba(255,69,58,0.07) 100%)',
-                  border: metrics.pnl >= 0
-                    ? '1px solid rgba(46,189,89,0.35)'
-                    : '1px solid rgba(255,69,58,0.35)',
-                  boxShadow: metrics.pnl >= 0
-                    ? '0 2px 10px rgba(46,189,89,0.15), inset 0 1px 0 rgba(255,255,255,0.08)'
-                    : '0 2px 10px rgba(255,69,58,0.15), inset 0 1px 0 rgba(255,255,255,0.08)'
+                  background: hoveredGroup === grp ? getGroupColor(grp) + '0c' : 'transparent',
+                  border: hoveredGroup === grp 
+                    ? '1px solid ' + getGroupColor(grp) + '55' 
+                    : '1px solid ' + getGroupColor(grp) + '24',
+                  boxShadow: hoveredGroup === grp 
+                    ? '0 6px 16px ' + getGroupColor(grp) + '22' 
+                    : 'none',
+                  transform: hoveredGroup === grp ? 'translateY(-2px)' : 'translateY(0)'
                 }"
               >
                 <span
                   style="display: inline-flex; width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;"
                   :style="{
                     background: getGroupColor(grp),
-                    boxShadow: '0 0 6px 2px ' + getGroupColor(grp) + '88'
+                    boxShadow: '0 0 6px ' + getGroupColor(grp) + '66'
                   }"
                 ></span>
-                <span style="font-size: 0.78rem; font-weight: 600; white-space: nowrap; max-width: 72px; overflow: hidden; text-overflow: ellipsis; letter-spacing: 0.02em;"
-                  :style="{ color: metrics.pnl >= 0 ? 'rgba(52,209,122,0.85)' : 'rgba(255,107,97,0.85)' }">{{ grp }}</span>
-                <span style="width: 1px; height: 12px; flex-shrink: 0;"
-                  :style="{ background: metrics.pnl >= 0 ? 'rgba(46,189,89,0.4)' : 'rgba(255,69,58,0.4)' }"></span>
+                <span style="font-size: 0.78rem; font-weight: 700; white-space: nowrap; max-width: 72px; overflow: hidden; text-overflow: ellipsis; letter-spacing: 0.02em; color: var(--color-text); opacity: 0.85;">{{ grp }}</span>
+                <span style="width: 1px; height: 12px; flex-shrink: 0; background: rgba(148, 163, 184, 0.25);"></span>
                 <span style="font-size: 0.92rem; font-weight: 800; white-space: nowrap; letter-spacing: -0.02em;"
-                  :style="{ color: metrics.pnl >= 0 ? '#34d17a' : '#ff6b61' }">
+                  :style="{ color: metrics.roi >= 0 ? 'var(--color-success)' : 'var(--color-danger)' }">
                   {{ metrics.roi >= 0 ? '+' : '' }}{{ metrics.roi.toFixed(2) }}%
                 </span>
               </div>
