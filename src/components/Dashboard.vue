@@ -634,6 +634,7 @@ const getNextTxDateStr = (day) => {
 
 // 新增項目 Modal
 const showAddModal = ref(false)
+const showFlowAnalysisModal = ref(false)
 const addModalStep = ref(1) // 1 = 選擇類別, 2 = 填寫表單
 const expandedCategories = ref({
   liquid: true,
@@ -1522,9 +1523,8 @@ const moneyFlowAnalysis = computed(() => {
     })
   }
 
-  let accountsFlowText = ''
+  const accChanges = []
   if (finalFirstAccounts && lastDetails.accounts) {
-    const accChanges = []
     Object.entries(lastDetails.accounts).forEach(([id, lastBal]) => {
       const firstBal = finalFirstAccounts[id]
       if (firstBal !== undefined) {
@@ -1536,10 +1536,6 @@ const moneyFlowAnalysis = computed(() => {
         }
       }
     })
-    
-    if (accChanges.length > 0) {
-      accountsFlowText = '\n\n各帳戶餘額變動：' + accChanges.map(ac => `\n• ${ac.name}: ${ac.diff >= 0 ? '+' : ''}${formatInvestNumber(ac.diff)} 元`).join('')
-    }
   }
 
   // Collect all transactions in the period
@@ -1569,7 +1565,6 @@ const moneyFlowAnalysis = computed(() => {
     tradeProfitText = `（本期累計實現損益：${profitSumTwd >= 0 ? '獲利' : '虧損'} ${formatInvestNumber(Math.abs(profitSumTwd))} 元）`
   }
 
-  let investFlowText = ''
   const periodLots = investments.value.filter(inv => {
     if (!inv.buy_date) return false
     return inv.buy_date >= first.date && inv.buy_date <= last.date
@@ -1595,7 +1590,10 @@ const moneyFlowAnalysis = computed(() => {
     
     Object.entries(flows).forEach(([accName, stocks]) => {
       const detailStr = Object.entries(stocks).map(([sym, cost]) => `${sym} (${formatInvestNumber(cost)} 元)`).join('、')
-      flowItems.push(`\n• 從 [${accName}] 流入股市：${detailStr}`)
+      flowItems.push({
+        type: 'buy',
+        text: `從 [${accName}] 流入股市：${detailStr}`
+      })
     })
   }
   
@@ -1616,12 +1614,11 @@ const moneyFlowAnalysis = computed(() => {
     
     Object.entries(inflowFlows).forEach(([accName, stocks]) => {
       const detailStr = Object.entries(stocks).map(([sym, val]) => `${sym} (${formatInvestNumber(val)} 元)`).join('、')
-      flowItems.push(`\n• 賣出變現匯入 [${accName}]：${detailStr}`)
+      flowItems.push({
+        type: 'sell',
+        text: `賣出變現匯入 [${accName}]：${detailStr}`
+      })
     })
-  }
-
-  if (flowItems.length > 0) {
-    investFlowText = '\n\n期間投資資金流向：' + flowItems.join('')
   }
   
   // Case 1: Cash decreased, Investment increased (Asset re-allocation)
@@ -1631,7 +1628,10 @@ const moneyFlowAnalysis = computed(() => {
       type: 'reallocation',
       title: '資金配置轉移',
       icon: '🔄',
-      text: `本期轉入股市投資約 ${formatInvestNumber(transferAmt)} 元${tradeProfitText}。${accountsFlowText}${investFlowText}`
+      summary: `本期轉入股市投資約 ${formatInvestNumber(transferAmt)} 元。`,
+      tradeProfitText,
+      accountsFlow: accChanges,
+      investFlow: flowItems
     }
   }
   
@@ -1641,7 +1641,10 @@ const moneyFlowAnalysis = computed(() => {
       type: 'outflow',
       title: '日常支出與市值波動',
       icon: '💸',
-      text: `本期流動資金減少 ${formatInvestNumber(Math.abs(liqDiff))} 元，投資部位縮水 ${formatInvestNumber(Math.abs(invDiff))} 元${tradeProfitText}。${accountsFlowText}${investFlowText}`
+      summary: `本期流動資金減少 ${formatInvestNumber(Math.abs(liqDiff))} 元，投資部位縮水 ${formatInvestNumber(Math.abs(invDiff))} 元。`,
+      tradeProfitText,
+      accountsFlow: accChanges,
+      investFlow: flowItems
     }
   }
   
@@ -1652,7 +1655,10 @@ const moneyFlowAnalysis = computed(() => {
       type: 'cashout',
       title: '投資獲利出場/變現',
       icon: '🏦',
-      text: `本期投資變現約 ${formatInvestNumber(cashOutAmt)} 元${tradeProfitText}。${accountsFlowText}${investFlowText}`
+      summary: `本期投資變現約 ${formatInvestNumber(cashOutAmt)} 元。`,
+      tradeProfitText,
+      accountsFlow: accChanges,
+      investFlow: flowItems
     }
   }
   
@@ -1662,7 +1668,10 @@ const moneyFlowAnalysis = computed(() => {
       type: 'growth',
       title: '資產雙重成長',
       icon: '📈',
-      text: `本期流動資金增加 ${formatInvestNumber(liqDiff)} 元，投資部位成長 ${formatInvestNumber(invDiff)} 元${tradeProfitText}。${accountsFlowText}${investFlowText}`
+      summary: `本期流動資金增加 ${formatInvestNumber(liqDiff)} 元，投資部位成長 ${formatInvestNumber(invDiff)} 元。`,
+      tradeProfitText,
+      accountsFlow: accChanges,
+      investFlow: flowItems
     }
   }
   
@@ -4693,10 +4702,21 @@ onUnmounted(() => {
           <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
             <span style="font-size: 1.1rem;">{{ moneyFlowAnalysis.icon }}</span>
             <span style="font-size: 0.88rem; font-weight: 700; color: var(--color-text);">{{ moneyFlowAnalysis.title }}</span>
-            <span style="font-size: 0.72rem; font-weight: 600; padding: 2px 8px; border-radius: 12px; background: rgba(92, 103, 245, 0.1); color: #5c67f5; margin-left: auto;">智慧分析</span>
           </div>
-          <p style="font-size: 0.82rem; line-height: 1.6; color: var(--color-text-muted); margin: 0;">
-            {{ moneyFlowAnalysis.text }}
+          <p style="font-size: 0.82rem; line-height: 1.6; color: var(--color-text-muted); margin: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;">
+            <span style="flex: 1; min-width: 200px;">
+              {{ moneyFlowAnalysis.summary }}
+              <span v-if="moneyFlowAnalysis.tradeProfitText" style="color: var(--color-primary); font-weight: 700; margin-left: 4px;">{{ moneyFlowAnalysis.tradeProfitText }}</span>
+            </span>
+            <button 
+              @click="showFlowAnalysisModal = true"
+              style="background: rgba(92, 103, 245, 0.1); border: none; border-radius: 50%; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; color: #5c67f5; cursor: pointer; font-size: 0.9rem; font-weight: bold; transition: all 0.2s; outline: none;"
+              onmouseover="this.style.transform='scale(1.1)'"
+              onmouseout="this.style.transform='scale(1)'"
+              title="查看詳細收支與投資金流明細"
+            >
+              ℹ️
+            </button>
           </p>
         </div>
 
@@ -6262,6 +6282,108 @@ onUnmounted(() => {
               </div>
             </template>
           </div>
+        </div>
+      </div>
+    </Transition>
+
+    <!-- Smart Flow Analysis Modal -->
+    <Transition name="modal-slide">
+      <div v-if="showFlowAnalysisModal" class="modal-overlay" style="z-index: 2200;">
+        <!-- Navbar matching native mobile app screenshot -->
+        <div class="modal-navbar">
+          <button class="nav-back-circle" @click="showFlowAnalysisModal = false" title="關閉">
+            <PhCaretLeft size="20" weight="bold" />
+          </button>
+          <span class="nav-title">資金流動明細</span>
+          <div class="nav-placeholder"></div>
+        </div>
+
+        <div class="modal-content-full" v-if="moneyFlowAnalysis">
+          <!-- Premium Summary Header -->
+          <div style="display: flex; flex-direction: column; align-items: center; text-align: center; margin: 24px 0 32px 0;">
+            <div style="width: 64px; height: 64px; border-radius: 50%; background: rgba(92,103,245,0.08); display: flex; align-items: center; justify-content: center; font-size: 2.2rem; margin-bottom: 16px; border: 1px solid rgba(92,103,245,0.15);">
+              {{ moneyFlowAnalysis.icon }}
+            </div>
+            <div style="font-size: 1.35rem; font-weight: 800; color: var(--color-text);">{{ moneyFlowAnalysis.title }}</div>
+            <div style="font-size: 0.92rem; color: var(--color-text-muted); margin-top: 8px; line-height: 1.5; padding: 0 16px;">
+              {{ moneyFlowAnalysis.summary }}
+            </div>
+          </div>
+
+          <!-- Realized profit/loss badge if any -->
+          <div 
+            v-if="moneyFlowAnalysis.tradeProfitText" 
+            style="margin-bottom: 28px; border-radius: 16px; padding: 14px 18px; display: flex; align-items: center; gap: 10px;"
+            :style="{ 
+              background: moneyFlowAnalysis.tradeProfitText.includes('獲利') ? 'rgba(46, 189, 89, 0.06)' : 'rgba(255, 69, 58, 0.06)', 
+              border: moneyFlowAnalysis.tradeProfitText.includes('獲利') ? '1px solid rgba(46, 189, 89, 0.15)' : '1px solid rgba(255, 69, 58, 0.15)' 
+            }"
+          >
+            <span style="font-size: 1.25rem;">💰</span>
+            <div style="display: flex; flex-direction: column; text-align: left;">
+              <span style="font-size: 0.72rem; color: var(--color-text-muted); font-weight: bold; letter-spacing: 0.5px;">本期交易損益</span>
+              <span 
+                style="font-size: 0.95rem; font-weight: 800; margin-top: 2px;"
+                :style="{ color: moneyFlowAnalysis.tradeProfitText.includes('獲利') ? '#2ebd59' : '#ff453a' }"
+              >
+                {{ moneyFlowAnalysis.tradeProfitText.replace('（', '').replace('）', '') }}
+              </span>
+            </div>
+          </div>
+
+          <!-- Section 1: Accounts Flow using native settings-table items -->
+          <div v-if="moneyFlowAnalysis.accountsFlow && moneyFlowAnalysis.accountsFlow.length > 0" style="margin-bottom: 32px; text-align: left;">
+            <div style="font-size: 0.82rem; font-weight: bold; color: var(--color-text-muted); margin-bottom: 12px; letter-spacing: 0.5px; text-transform: uppercase;">🏦 帳戶餘額變動</div>
+            <div class="settings-table-list" style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); border-radius: 16px; padding: 6px 12px;">
+              <div v-for="ac in moneyFlowAnalysis.accountsFlow" :key="ac.name" class="settings-table-item" style="cursor: default; padding: 12px 6px;">
+                <div class="item-meta">
+                  <span class="item-name">{{ ac.name }}</span>
+                </div>
+                <div class="item-right-wrap">
+                  <span :style="{ color: ac.diff >= 0 ? '#2ebd59' : '#ff453a', fontWeight: '800', fontSize: '0.92rem' }">
+                    {{ ac.diff >= 0 ? '+' : '' }}{{ formatInvestNumber(ac.diff) }} 元
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Section 2: Invest Flow using custom design-rich row cards -->
+          <div v-if="moneyFlowAnalysis.investFlow && moneyFlowAnalysis.investFlow.length > 0" style="margin-bottom: 32px; text-align: left;">
+            <div style="font-size: 0.82rem; font-weight: bold; color: var(--color-text-muted); margin-bottom: 12px; letter-spacing: 0.5px; text-transform: uppercase;">📈 投資資金流向軌跡</div>
+            <div style="display: flex; flex-direction: column; gap: 12px;">
+              <div v-for="(item, idx) in moneyFlowAnalysis.investFlow" :key="idx" 
+                   style="display: flex; align-items: center; gap: 14px; padding: 14px 16px; border-radius: 16px; border: 1px solid;"
+                   :style="{
+                     background: item.type === 'sell' ? 'rgba(46, 189, 89, 0.05)' : 'rgba(92, 103, 245, 0.05)',
+                     borderColor: item.type === 'sell' ? 'rgba(46, 189, 89, 0.12)' : 'rgba(92, 103, 245, 0.12)'
+                   }">
+                <div style="width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 1.1rem; flex-shrink: 0;"
+                     :style="{
+                       background: item.type === 'sell' ? 'rgba(46, 189, 89, 0.1)' : 'rgba(92, 103, 245, 0.1)',
+                       color: item.type === 'sell' ? '#2ebd59' : '#5c67f5'
+                     }">
+                  {{ item.type === 'sell' ? '📥' : '📤' }}
+                </div>
+                <div style="display: flex; flex-direction: column; text-align: left;">
+                  <span style="font-size: 0.88rem; font-weight: 700; color: var(--color-text);">
+                    {{ item.type === 'sell' ? '賣出變現匯入' : '資金流入股市' }}
+                  </span>
+                  <span style="font-size: 0.82rem; color: var(--color-text-muted); margin-top: 2px;">
+                    {{ item.text.split('：')[1] || item.text }}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Bottom Close Button -->
+          <button 
+            @click="showFlowAnalysisModal = false"
+            style="width: 100%; padding: 16px; border-radius: 16px; background: var(--color-primary); color: #ffffff; font-weight: 700; border: none; cursor: pointer; font-size: 0.95rem; margin-top: 12px; box-shadow: none;"
+          >
+            關閉
+          </button>
         </div>
       </div>
     </Transition>
