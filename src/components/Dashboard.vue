@@ -1299,7 +1299,15 @@ const trendDatasets = computed(() => {
         netWorth: todayNetWorth,
         liabilities: todayLiabilities,
         liquid: todayLiquid,
-        invest: todayInvest
+        invest: todayInvest,
+        details: {
+          accounts: accounts.value.reduce((acc, curr) => {
+            acc[curr.id] = Number(curr.balance)
+            return acc
+          }, {}),
+          investments_value: todayInvest,
+          investments_cost: totalInvestmentCostTwd.value
+        }
       }
     }
     
@@ -1314,7 +1322,8 @@ const trendDatasets = computed(() => {
       netWorth: r.amount,
       liabilities: todayLiabilities, // 負債視為常數
       liquid: estLiquid,
-      invest: estInvest
+      invest: estInvest,
+      details: r.details
     }
   })
 })
@@ -1370,6 +1379,117 @@ const liquidInvestSummaryText = computed(() => {
   
   return { liquid: liqText, invest: invText }
 })
+
+const moneyFlowAnalysis = computed(() => {
+  const datasets = trendDatasets.value
+  if (datasets.length < 2) return null
+  
+  const first = datasets[0]
+  const last = datasets[datasets.length - 1]
+  
+  const liqDiff = last.liquid - first.liquid
+  const invDiff = last.invest - first.invest
+  
+  const firstDetails = first.details || {}
+  const lastDetails = last.details || {}
+  
+  let accountsFlowText = ''
+  if (firstDetails.accounts && lastDetails.accounts) {
+    const accChanges = []
+    Object.entries(lastDetails.accounts).forEach(([id, lastBal]) => {
+      const firstBal = firstDetails.accounts[id]
+      if (firstBal !== undefined) {
+        const diff = Number(lastBal) - Number(firstBal)
+        if (Math.abs(diff) > 0.01) {
+          const acc = accounts.value.find(a => a.id === id)
+          const name = acc ? acc.name : '未知帳戶'
+          accChanges.push({ name, diff })
+        }
+      }
+    })
+    
+    if (accChanges.length > 0) {
+      accountsFlowText = '\n\n各帳戶餘額變動：' + accChanges.map(ac => `\n• ${ac.name}: ${ac.diff >= 0 ? '+' : ''}${formatInvestNumber(ac.diff)} 元`).join('')
+    }
+  }
+  
+  let investFlowText = ''
+  const periodLots = investments.value.filter(inv => {
+    if (!inv.buy_date) return false
+    return inv.buy_date >= first.date && inv.buy_date <= last.date
+  })
+  if (periodLots.length > 0) {
+    const flows = {}
+    periodLots.forEach(lot => {
+      const fundId = lot.funding_account_id
+      if (fundId) {
+        const acc = accounts.value.find(a => a.id === fundId)
+        const accName = acc ? acc.name : '未知帳戶'
+        if (!flows[accName]) flows[accName] = {}
+        const sym = lot.symbol.toUpperCase()
+        const lotCost = Number(lot.quantity || 0) * Number(lot.buy_price || lot.average_cost || 0)
+        const lotCostTwd = lot.currency === 'USD' ? lotCost * usdTwdRate.value : lotCost
+        flows[accName][sym] = (flows[accName][sym] || 0) + lotCostTwd
+      }
+    })
+    
+    const flowItems = []
+    Object.entries(flows).forEach(([accName, stocks]) => {
+      const detailStr = Object.entries(stocks).map(([sym, cost]) => `${sym} (${formatInvestNumber(cost)} 元)`).join('、')
+      flowItems.push(`\n• 從 [${accName}] 流入股市：${detailStr}`)
+    })
+    if (flowItems.length > 0) {
+      investFlowText = '\n\n期間投資資金流向：' + flowItems.join('')
+    }
+  }
+  
+  // Case 1: Cash decreased, Investment increased (Asset re-allocation)
+  if (liqDiff < 0 && invDiff > 0) {
+    const transferAmt = Math.min(Math.abs(liqDiff), invDiff)
+    const transferPct = Math.round((transferAmt / Math.abs(liqDiff)) * 100)
+    const otherExpense = Math.abs(liqDiff) - transferAmt
+    return {
+      type: 'reallocation',
+      title: '資金配置轉移',
+      icon: '🔄',
+      text: `本期您的流動資金減少了 ${formatInvestNumber(Math.abs(liqDiff))} 元，其中有 ${formatInvestNumber(transferAmt)} 元 (${transferPct}%) 轉移到了投資部位（變為股票資產）。這代表您的資金並非全部花掉，而是進行了資產配置調整！真正的日常消費與折舊支出僅為 ${formatInvestNumber(otherExpense)} 元。${accountsFlowText}${investFlowText}`
+    }
+  }
+  
+  // Case 2: Cash decreased, and Investment also decreased (Outflow / Expense / Asset depreciation)
+  if (liqDiff < 0 && invDiff <= 0) {
+    return {
+      type: 'outflow',
+      title: '日常支出與市值波動',
+      icon: '💸',
+      text: `本期您的流動資金減少了 ${formatInvestNumber(Math.abs(liqDiff))} 元，投資部位也變動了 ${formatInvestNumber(Math.abs(invDiff))} 元。日常支出與投資市值的回檔是主要原因。建議您可以檢視日常消費設定或標的走勢。${accountsFlowText}${investFlowText}`
+    }
+  }
+  
+  // Case 3: Cash increased, Investment decreased (Selling investments / Cash-out)
+  if (liqDiff >= 0 && invDiff < 0) {
+    const cashOutAmt = Math.min(liqDiff, Math.abs(invDiff))
+    return {
+      type: 'cashout',
+      title: '投資獲利出場/變現',
+      icon: '🏦',
+      text: `本期您的流動資金增加了 ${formatInvestNumber(liqDiff)} 元，而投資部位變動了 ${formatInvestNumber(Math.abs(invDiff))} 元。這表明您將部分投資進行了變現（金額約 ${formatInvestNumber(cashOutAmt)} 元），轉回了存款。${accountsFlowText}${investFlowText}`
+    }
+  }
+  
+  // Case 4: Cash increased, Investment increased (Wealth accumulation)
+  if (liqDiff >= 0 && invDiff >= 0) {
+    return {
+      type: 'growth',
+      title: '資產雙重成長',
+      icon: '📈',
+      text: `恭喜！本期您的流動資金增加了 ${formatInvestNumber(liqDiff)} 元，且投資部位也成長了 ${formatInvestNumber(invDiff)} 元，資產實現了雙重積累！${accountsFlowText}${investFlowText}`
+    }
+  }
+  
+  return null
+})
+
 
 const trendPeriodROI = computed(() => {
   const datasets = trendDatasets.value
@@ -2178,23 +2298,36 @@ const saveDailySnapshot = async (amount) => {
   const localDate = new Date(d.getTime() - (offset * 60 * 1000))
   const dateStr = localDate.toISOString().split('T')[0]
   
+  const details = {
+    accounts: accounts.value.reduce((acc, curr) => {
+      acc[curr.id] = Number(curr.balance)
+      return acc
+    }, {}),
+    investments_value: totalInvestments.value,
+    investments_cost: totalInvestmentCostTwd.value
+  }
+  
   try {
     const { error } = await supabase
       .from('net_worth_history')
-      .upsert({ date: dateStr, amount }, { onConflict: 'date' })
-    if (error) saveSnapshotToLocal(dateStr, amount)
+      .upsert({ date: dateStr, amount, details }, { onConflict: 'date' })
+    if (error) saveSnapshotToLocal(dateStr, amount, details)
   } catch {
-    saveSnapshotToLocal(dateStr, amount)
+    saveSnapshotToLocal(dateStr, amount, details)
   }
   
   await fetchHistoricalSnapshots()
 }
 
-const saveSnapshotToLocal = (dateStr, amount) => {
+const saveSnapshotToLocal = (dateStr, amount, details) => {
   let history = JSON.parse(localStorage.getItem('net_worth_history') || '[]')
   const index = history.findIndex(h => h.date === dateStr)
-  if (index !== -1) history[index].amount = amount
-  else history.push({ date: dateStr, amount })
+  if (index !== -1) {
+    history[index].amount = amount
+    history[index].details = details
+  } else {
+    history.push({ date: dateStr, amount, details })
+  }
   history.sort((a, b) => new Date(a.date) - new Date(b.date))
   localStorage.setItem('net_worth_history', JSON.stringify(history))
 }
@@ -2204,19 +2337,20 @@ const fetchHistoricalSnapshots = async () => {
   try {
     const { data, error } = await supabase
       .from('net_worth_history')
-      .select('date, amount')
+      .select('date, amount, details')
       .order('date', { ascending: true })
     if (!error && data) dbRecords = data
   } catch {}
 
   const localRecords = JSON.parse(localStorage.getItem('net_worth_history') || '[]')
   const merged = {}
-  localRecords.forEach(r => merged[r.date] = Number(r.amount))
-  dbRecords.forEach(r => merged[r.date] = Number(r.amount))
+  localRecords.forEach(r => merged[r.date] = { amount: Number(r.amount), details: r.details || null })
+  dbRecords.forEach(r => merged[r.date] = { amount: Number(r.amount), details: r.details || null })
 
-  historyRecords.value = Object.entries(merged).map(([date, amount]) => ({
+  historyRecords.value = Object.entries(merged).map(([date, item]) => ({
     date,
-    amount
+    amount: item.amount,
+    details: item.details
   })).sort((a, b) => new Date(a.date) - new Date(b.date))
 
   // 生成模擬成長曲線（改為平緩的當前淨資產，避免未有歷史紀錄時出現虛假的增長幅度）
@@ -4305,6 +4439,30 @@ onUnmounted(() => {
           </div>
         </template>
 
+        <!-- Smart Money Flow Analysis Card -->
+        <div 
+          v-if="trendType === 'liquid_invest' && moneyFlowAnalysis"
+          style="
+            background: linear-gradient(135deg, rgba(92, 103, 245, 0.04) 0%, rgba(92, 103, 245, 0.01) 100%);
+            border: 1px solid rgba(92, 103, 245, 0.12);
+            border-radius: 16px;
+            padding: 16px;
+            margin-bottom: 24px;
+            text-align: left;
+            box-shadow: 0 4px 12px rgba(92, 103, 245, 0.02);
+            backdrop-filter: blur(8px);
+          "
+        >
+          <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+            <span style="font-size: 1.1rem;">{{ moneyFlowAnalysis.icon }}</span>
+            <span style="font-size: 0.88rem; font-weight: 700; color: var(--color-text);">{{ moneyFlowAnalysis.title }}</span>
+            <span style="font-size: 0.72rem; font-weight: 600; padding: 2px 8px; border-radius: 12px; background: rgba(92, 103, 245, 0.1); color: #5c67f5; margin-left: auto;">智慧分析</span>
+          </div>
+          <p style="font-size: 0.82rem; line-height: 1.6; color: var(--color-text-muted); margin: 0;">
+            {{ moneyFlowAnalysis.text }}
+          </p>
+        </div>
+
         <!-- Custom Date Picker Row -->
         <div v-if="timeFilter === 'ALL'" style="display: flex; gap: 12px; align-items: center; margin-bottom: 20px; padding: 0 4px; width: 100%; box-sizing: border-box;">
           <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; text-align: left;">
@@ -5276,6 +5434,7 @@ onUnmounted(() => {
                 </span>
               </div>
             </div>
+
           </div>
 
           <!-- Plus / Minus Segments -->
