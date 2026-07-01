@@ -19,6 +19,8 @@ const currentTab = ref('list') // list, trend, settings
 const showStatsModal = ref(false)
 const statsType = ref('invest') // invest, liquid
 const statsTimeFilter = ref('6M') // 5W, 6M, 1Y, YTD, 4Y
+const syncAccountBalance = ref(false)
+const todayTransactions = ref([])
 
 const handleBottomNavClick = (tabId) => {
   if (tabId === 'list') {
@@ -695,6 +697,7 @@ const openInvestmentDetail = (symbol) => {
 const adjustSharesVal = ref('')
 const adjustAction = ref('plus')
 const adjustPrice = ref(0)
+const customProfitVal = ref('')
 const adjustRemarks = ref('增減金額')
 const modifySharesVal = ref('')
 const modifyPrice = ref(0)
@@ -706,6 +709,7 @@ const openAdjustShares = () => {
   adjustSharesVal.value = ''
   adjustAction.value = 'plus'
   adjustPrice.value = inv.current_price
+  customProfitVal.value = ''
   adjustRemarks.value = '增減金額'
   addModalStep.value = 5 // Step 5: Adjust Shares
 }
@@ -730,7 +734,42 @@ const submitAdjustShares = async () => {
   
   const lots = investments.value.filter(i => i.symbol.toUpperCase() === inv.symbol.toUpperCase())
   if (lots.length > 0) {
+    // ── Funding/Proceeds account updates ──
+    let accountsChanged = false
+    let updatedAccounts = [...accounts.value]
+    
+    if (newAsset.value.funding_account_id && syncAccountBalance.value) {
+      const lotCurrency = lots[0].currency || 'TWD'
+      const txVal = qtyChange * buyPrice
+      const txValTwd = lotCurrency === 'USD' ? txVal * usdTwdRate.value : txVal
+      
+      updatedAccounts = updatedAccounts.map(acc => {
+        if (acc.id === newAsset.value.funding_account_id) {
+          if (adjustAction.value === 'plus') {
+            const newBal = Number(acc.balance) - txValTwd
+            acc.balance = newBal >= 0 ? newBal : 0
+          } else {
+            acc.balance = Number(acc.balance) + txValTwd
+          }
+          acc._dirty = true
+          accountsChanged = true
+        }
+        return acc
+      })
+    }
+
     if (finalQtyChange > 0) {
+      if (newAsset.value.funding_account_id) {
+        todayTransactions.value.push({
+          type: 'buy',
+          symbol: inv.symbol.toUpperCase(),
+          quantity: finalQtyChange,
+          price: buyPrice,
+          currency: lots[0].currency || 'TWD',
+          funding_account_id: newAsset.value.funding_account_id,
+          date: new Date().toISOString().split('T')[0]
+        })
+      }
       const generatedId = 'local-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9)
       const nowStr = new Date().toISOString()
       const payload = {
@@ -747,7 +786,8 @@ const submitAdjustShares = async () => {
         buy_date: new Date().toISOString().split('T')[0],
         created_at: nowStr,
         price_updated_at: nowStr,
-        custom_group: lots[0].custom_group || ''
+        custom_group: lots[0].custom_group || '',
+        funding_account_id: newAsset.value.funding_account_id || null
       }
       try {
         const dbPayload = { ...payload }
@@ -760,9 +800,37 @@ const submitAdjustShares = async () => {
       investments.value.unshift(payload)
     } else {
       let remainingToSubtract = Math.abs(finalQtyChange)
+      let customProfitAssigned = false
       for (let i = 0; i < lots.length; i++) {
         const lot = lots[i]
         if (lot.quantity >= remainingToSubtract) {
+          const qtySubtracted = remainingToSubtract
+          let profit = 0
+          if (customProfitVal.value !== '') {
+            if (!customProfitAssigned) {
+              const val = Number(customProfitVal.value)
+              profit = lot.currency === 'USD' ? val / usdTwdRate.value : val
+              customProfitAssigned = true
+            } else {
+              profit = 0
+            }
+          } else {
+            profit = (buyPrice - Number(lot.average_cost || 0)) * qtySubtracted
+          }
+          
+          if (newAsset.value.funding_account_id) {
+            todayTransactions.value.push({
+              type: 'sell',
+              symbol: inv.symbol.toUpperCase(),
+              quantity: qtySubtracted,
+              price: buyPrice,
+              average_cost: Number(lot.average_cost || 0),
+              currency: lot.currency || 'TWD',
+              funding_account_id: newAsset.value.funding_account_id,
+              date: new Date().toISOString().split('T')[0],
+              profit: profit
+            })
+          }
           lot.quantity -= remainingToSubtract
           remainingToSubtract = 0
           try {
@@ -770,6 +838,33 @@ const submitAdjustShares = async () => {
           } catch {}
           break;
         } else {
+          const qtySubtracted = lot.quantity
+          let profit = 0
+          if (customProfitVal.value !== '') {
+            if (!customProfitAssigned) {
+              const val = Number(customProfitVal.value)
+              profit = lot.currency === 'USD' ? val / usdTwdRate.value : val
+              customProfitAssigned = true
+            } else {
+              profit = 0
+            }
+          } else {
+            profit = (buyPrice - Number(lot.average_cost || 0)) * qtySubtracted
+          }
+
+          if (newAsset.value.funding_account_id) {
+            todayTransactions.value.push({
+              type: 'sell',
+              symbol: inv.symbol.toUpperCase(),
+              quantity: qtySubtracted,
+              price: buyPrice,
+              average_cost: Number(lot.average_cost || 0),
+              currency: lot.currency || 'TWD',
+              funding_account_id: newAsset.value.funding_account_id,
+              date: new Date().toISOString().split('T')[0],
+              profit: profit
+            })
+          }
           remainingToSubtract -= lot.quantity
           lot.quantity = 0
           try {
@@ -780,6 +875,27 @@ const submitAdjustShares = async () => {
       investments.value = investments.value.filter(i => i.quantity > 0)
     }
     localStorage.setItem('local_investments', JSON.stringify(investments.value))
+
+    // Save accounts changes if any funding occurred
+    if (accountsChanged) {
+      accounts.value = updatedAccounts
+      const cleanAccounts = updatedAccounts.map(a => {
+        const copy = { ...a }
+        delete copy._dirty
+        return copy
+      })
+      localStorage.setItem('local_accounts', JSON.stringify(cleanAccounts))
+      for (const acc of updatedAccounts) {
+        if (acc._dirty) {
+          delete acc._dirty
+          try {
+            await supabase.from('accounts').update({ balance: acc.balance }).eq('id', acc.id)
+          } catch (err) {
+            console.warn('Sync account balance after investment adjustment failed:', err)
+          }
+        }
+      }
+    }
   }
   
   await fetchAllData()
@@ -1393,11 +1509,25 @@ const moneyFlowAnalysis = computed(() => {
   const firstDetails = first.details || {}
   const lastDetails = last.details || {}
   
+  let finalFirstAccounts = firstDetails.accounts
+  if (!finalFirstAccounts && lastDetails.accounts) {
+    const totalLiq = accounts.value.filter(a => ['Bank', 'Cash', 'E-Wallet', 'OtherLiquid'].includes(a.type)).reduce((s, a) => s + Number(a.balance), 0)
+    finalFirstAccounts = {}
+    accounts.value.forEach(acc => {
+      if (['Bank', 'Cash', 'E-Wallet', 'OtherLiquid'].includes(acc.type)) {
+        const ratio = totalLiq > 0 ? Number(acc.balance) / totalLiq : 0
+        finalFirstAccounts[acc.id] = first.liquid * ratio
+      } else {
+        finalFirstAccounts[acc.id] = Number(acc.balance)
+      }
+    })
+  }
+
   let accountsFlowText = ''
-  if (firstDetails.accounts && lastDetails.accounts) {
+  if (finalFirstAccounts && lastDetails.accounts) {
     const accChanges = []
     Object.entries(lastDetails.accounts).forEach(([id, lastBal]) => {
-      const firstBal = firstDetails.accounts[id]
+      const firstBal = finalFirstAccounts[id]
       if (firstBal !== undefined) {
         const diff = Number(lastBal) - Number(firstBal)
         if (Math.abs(diff) > 0.01) {
@@ -1412,12 +1542,43 @@ const moneyFlowAnalysis = computed(() => {
       accountsFlowText = '\n\n各帳戶餘額變動：' + accChanges.map(ac => `\n• ${ac.name}: ${ac.diff >= 0 ? '+' : ''}${formatInvestNumber(ac.diff)} 元`).join('')
     }
   }
-  
+
+  // Collect all transactions in the period
+  const periodTransactions = []
+  datasets.forEach(d => {
+    if (d.details && d.details.transactions) {
+      d.details.transactions.forEach(tx => {
+        periodTransactions.push(tx)
+      })
+    }
+  })
+
+  const sellTxList = periodTransactions.filter(tx => tx.type === 'sell')
+  let profitSumTwd = 0
+  let hasSellTrades = false
+  if (sellTxList.length > 0) {
+    hasSellTrades = true
+    sellTxList.forEach(tx => {
+      const p = Number(tx.profit || 0)
+      const pTwd = tx.currency === 'USD' ? p * usdTwdRate.value : p
+      profitSumTwd += pTwd
+    })
+  }
+
+  let tradeProfitText = ''
+  if (hasSellTrades) {
+    tradeProfitText = `（本期累計實現損益：${profitSumTwd >= 0 ? '獲利' : '虧損'} ${formatInvestNumber(Math.abs(profitSumTwd))} 元）`
+  }
+
   let investFlowText = ''
   const periodLots = investments.value.filter(inv => {
     if (!inv.buy_date) return false
     return inv.buy_date >= first.date && inv.buy_date <= last.date
   })
+  
+  const flowItems = []
+  
+  // 1) Outflows (Buys)
   if (periodLots.length > 0) {
     const flows = {}
     periodLots.forEach(lot => {
@@ -1433,26 +1594,45 @@ const moneyFlowAnalysis = computed(() => {
       }
     })
     
-    const flowItems = []
     Object.entries(flows).forEach(([accName, stocks]) => {
       const detailStr = Object.entries(stocks).map(([sym, cost]) => `${sym} (${formatInvestNumber(cost)} 元)`).join('、')
       flowItems.push(`\n• 從 [${accName}] 流入股市：${detailStr}`)
     })
-    if (flowItems.length > 0) {
-      investFlowText = '\n\n期間投資資金流向：' + flowItems.join('')
-    }
+  }
+  
+  // 2) Inflows (Sells)
+  if (sellTxList.length > 0) {
+    const inflowFlows = {}
+    sellTxList.forEach(tx => {
+      const fundId = tx.funding_account_id
+      if (fundId) {
+        const acc = accounts.value.find(a => a.id === fundId)
+        const accName = acc ? acc.name : '未知帳戶'
+        if (!inflowFlows[accName]) inflowFlows[accName] = {}
+        const sym = tx.symbol.toUpperCase()
+        const valTwd = Number(tx.quantity || 0) * Number(tx.price || 0) * (tx.currency === 'USD' ? usdTwdRate.value : 1)
+        inflowFlows[accName][sym] = (inflowFlows[accName][sym] || 0) + valTwd
+      }
+    })
+    
+    Object.entries(inflowFlows).forEach(([accName, stocks]) => {
+      const detailStr = Object.entries(stocks).map(([sym, val]) => `${sym} (${formatInvestNumber(val)} 元)`).join('、')
+      flowItems.push(`\n• 賣出變現匯入 [${accName}]：${detailStr}`)
+    })
+  }
+
+  if (flowItems.length > 0) {
+    investFlowText = '\n\n期間投資資金流向：' + flowItems.join('')
   }
   
   // Case 1: Cash decreased, Investment increased (Asset re-allocation)
   if (liqDiff < 0 && invDiff > 0) {
     const transferAmt = Math.min(Math.abs(liqDiff), invDiff)
-    const transferPct = Math.round((transferAmt / Math.abs(liqDiff)) * 100)
-    const otherExpense = Math.abs(liqDiff) - transferAmt
     return {
       type: 'reallocation',
       title: '資金配置轉移',
       icon: '🔄',
-      text: `本期您的流動資金減少了 ${formatInvestNumber(Math.abs(liqDiff))} 元，其中有 ${formatInvestNumber(transferAmt)} 元 (${transferPct}%) 轉移到了投資部位（變為股票資產）。這代表您的資金並非全部花掉，而是進行了資產配置調整！真正的日常消費與折舊支出僅為 ${formatInvestNumber(otherExpense)} 元。${accountsFlowText}${investFlowText}`
+      text: `本期轉入股市投資約 ${formatInvestNumber(transferAmt)} 元${tradeProfitText}。${accountsFlowText}${investFlowText}`
     }
   }
   
@@ -1462,7 +1642,7 @@ const moneyFlowAnalysis = computed(() => {
       type: 'outflow',
       title: '日常支出與市值波動',
       icon: '💸',
-      text: `本期您的流動資金減少了 ${formatInvestNumber(Math.abs(liqDiff))} 元，投資部位也變動了 ${formatInvestNumber(Math.abs(invDiff))} 元。日常支出與投資市值的回檔是主要原因。建議您可以檢視日常消費設定或標的走勢。${accountsFlowText}${investFlowText}`
+      text: `本期流動資金減少 ${formatInvestNumber(Math.abs(liqDiff))} 元，投資部位縮水 ${formatInvestNumber(Math.abs(invDiff))} 元${tradeProfitText}。${accountsFlowText}${investFlowText}`
     }
   }
   
@@ -1473,7 +1653,7 @@ const moneyFlowAnalysis = computed(() => {
       type: 'cashout',
       title: '投資獲利出場/變現',
       icon: '🏦',
-      text: `本期您的流動資金增加了 ${formatInvestNumber(liqDiff)} 元，而投資部位變動了 ${formatInvestNumber(Math.abs(invDiff))} 元。這表明您將部分投資進行了變現（金額約 ${formatInvestNumber(cashOutAmt)} 元），轉回了存款。${accountsFlowText}${investFlowText}`
+      text: `本期投資變現約 ${formatInvestNumber(cashOutAmt)} 元${tradeProfitText}。${accountsFlowText}${investFlowText}`
     }
   }
   
@@ -1483,7 +1663,7 @@ const moneyFlowAnalysis = computed(() => {
       type: 'growth',
       title: '資產雙重成長',
       icon: '📈',
-      text: `恭喜！本期您的流動資金增加了 ${formatInvestNumber(liqDiff)} 元，且投資部位也成長了 ${formatInvestNumber(invDiff)} 元，資產實現了雙重積累！${accountsFlowText}${investFlowText}`
+      text: `本期流動資金增加 ${formatInvestNumber(liqDiff)} 元，投資部位成長 ${formatInvestNumber(invDiff)} 元${tradeProfitText}。${accountsFlowText}${investFlowText}`
     }
   }
   
@@ -2304,7 +2484,8 @@ const saveDailySnapshot = async (amount) => {
       return acc
     }, {}),
     investments_value: totalInvestments.value,
-    investments_cost: totalInvestmentCostTwd.value
+    investments_cost: totalInvestmentCostTwd.value,
+    transactions: todayTransactions.value
   }
   
   try {
@@ -2366,6 +2547,14 @@ const fetchHistoricalSnapshots = async () => {
       })
     }
     historyRecords.value = mockData
+  }
+
+  const todayStr = new Date().toISOString().split('T')[0]
+  const todayRecord = historyRecords.value.find(h => h.date === todayStr)
+  if (todayRecord && todayRecord.details && todayRecord.details.transactions) {
+    todayTransactions.value = todayRecord.details.transactions
+  } else {
+    todayTransactions.value = []
   }
 }
 
@@ -2761,6 +2950,22 @@ const addAssetItem = async () => {
       }
       
       let accountsChanged = false
+      let updatedAccounts = [...accounts.value]
+      
+      if (!isEditing.value && newAsset.value.funding_account_id && syncAccountBalance.value) {
+        const cost = qty * buyPrice
+        const costTwd = payload.currency === 'USD' ? cost * usdTwdRate.value : cost
+        
+        updatedAccounts = updatedAccounts.map(acc => {
+          if (acc.id === newAsset.value.funding_account_id) {
+            const newBal = Number(acc.balance) - costTwd
+            acc.balance = newBal >= 0 ? newBal : 0
+            acc._dirty = true
+            accountsChanged = true
+          }
+          return acc
+        })
+      }
       
       if (isEditing.value) {
         try {
@@ -2782,6 +2987,17 @@ const addAssetItem = async () => {
           investments.value[idx] = { ...investments.value[idx], ...payload }
         }
       } else {
+        if (newAsset.value.funding_account_id) {
+          todayTransactions.value.push({
+            type: 'buy',
+            symbol: payload.symbol,
+            quantity: qty,
+            price: buyPrice,
+            currency: payload.currency || 'TWD',
+            funding_account_id: newAsset.value.funding_account_id,
+            date: payload.buy_date
+          })
+        }
         try {
           const dbPayload = { ...payload }
           delete dbPayload.id
@@ -3178,6 +3394,8 @@ const closeAddModal = () => {
   addModalStep.value = 1
   isEditing.value = false
   editingId.value = null
+  syncAccountBalance.value = false
+  customProfitVal.value = ''
 }
 
 const selectProvider = (item) => {
@@ -4983,9 +5201,35 @@ onUnmounted(() => {
               </div>
 
               <!-- 備註 -->
-              <div class="form-item-row" style="border-bottom: none;">
+              <div class="form-item-row">
                 <span class="row-label">備註</span>
                 <input v-model="newAsset.remarks" placeholder="輸入備註" class="input-flat-right text-right" />
+              </div>
+
+              <!-- 扣款帳戶 -->
+              <div class="form-item-row" style="position: relative;" :style="{ borderBottom: newAsset.funding_account_id ? '1px solid rgba(255, 255, 255, 0.05)' : 'none' }">
+                <span class="row-label">扣款帳戶</span>
+                <div class="row-value-wrapper">
+                  <span class="display-val" style="color: var(--color-text); font-size: 0.95rem; font-weight: 700;">
+                    {{ accounts.find(a => a.id === newAsset.funding_account_id)?.name || '無連動扣款' }}
+                  </span>
+                  <PhCaretRight size="16" class="caret-indicator" />
+                </div>
+                <select v-model="newAsset.funding_account_id" class="invisible-select">
+                  <option :value="null">無連動扣款 (僅作記錄)</option>
+                  <option v-for="acc in accounts.filter(a => ['Bank', 'Cash', 'E-Wallet', 'OtherLiquid'].includes(a.type))" :key="acc.id" :value="acc.id">
+                    {{ acc.name }} (餘額: {{ formatInvestNumber(acc.balance) }} 元)
+                  </option>
+                </select>
+              </div>
+
+              <!-- 同步扣除帳戶餘額 -->
+              <div v-if="newAsset.funding_account_id" class="form-item-row" style="border-bottom: none;">
+                <span class="row-label">同步扣除帳戶餘額</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" v-model="syncAccountBalance" />
+                  <span class="toggle-slider"></span>
+                </label>
               </div>
             </div>
             
@@ -5435,6 +5679,39 @@ onUnmounted(() => {
               </div>
             </div>
 
+            <!-- 連動帳戶 -->
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(0, 0, 0, 0.06); padding-bottom: 12px; position: relative;">
+              <span style="color: var(--color-text-muted); font-size: 0.95rem;">
+                {{ adjustAction === 'plus' ? '扣款帳戶' : '收款帳戶' }}
+              </span>
+              <div style="display: flex; align-items: center; gap: 4px;">
+                <span style="font-size: 0.95rem; font-weight: 700; color: var(--color-text);">
+                  {{ accounts.find(a => a.id === newAsset.funding_account_id)?.name || '無連動帳戶' }}
+                </span>
+                <PhCaretDown size="16" style="color: var(--color-text-muted);" />
+              </div>
+              <select v-model="newAsset.funding_account_id" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer;">
+                <option :value="null">無連動帳戶 (僅作記錄)</option>
+                <option v-for="acc in accounts.filter(a => ['Bank', 'Cash', 'E-Wallet', 'OtherLiquid'].includes(a.type))" :key="acc.id" :value="acc.id">
+                  {{ acc.name }} (餘額: {{ formatInvestNumber(acc.balance) }} 元)
+                </option>
+              </select>
+            </div>
+
+            <!-- 同步更新帳戶餘額 -->
+            <div v-if="newAsset.funding_account_id" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(0, 0, 0, 0.06); padding-bottom: 12px;">
+              <span style="color: var(--color-text-muted); font-size: 0.95rem;">同步更新帳戶餘額</span>
+              <label class="toggle-switch">
+                <input type="checkbox" v-model="syncAccountBalance" />
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+
+            <!-- 手動修正實現損益 (僅在賣出時顯示) -->
+            <div v-if="adjustAction === 'minus'" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(0, 0, 0, 0.06); padding-bottom: 12px;">
+              <span style="color: var(--color-text-muted); font-size: 0.95rem;">手動修正實現損益 (TWD)</span>
+              <input v-model="customProfitVal" type="number" step="any" placeholder="留空使用預估值" class="reset-input" style="background: transparent; border: none; color: var(--color-text); font-size: 0.95rem; text-align: right; outline: none; width: 50%; padding: 0 !important; margin: 0 !important;" />
+            </div>
           </div>
 
           <!-- Plus / Minus Segments -->
