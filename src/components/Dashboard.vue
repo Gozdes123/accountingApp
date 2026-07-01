@@ -4078,7 +4078,7 @@ onUnmounted(() => {
           <div class="list-column">
             
             <!-- Card: 流動資金 -->
-            <div class="group-wrapper" v-if="totalLiquidAssets > 0 || accounts.length === 0">
+            <div class="group-wrapper" v-if="filteredAccounts('liquid').length > 0 || accounts.length === 0">
               <div class="group-header-card" :class="{ 'expanded-header bg-liquid': listExpanded.liquid }" @click="toggleListExpand('liquid')" style="cursor: pointer;">
                 <div class="card-header-main-row">
                   <span class="group-title-text" :class="{ 'text-dark': !listExpanded.liquid, 'text-white': listExpanded.liquid }">流動資金</span>
@@ -4140,7 +4140,7 @@ onUnmounted(() => {
             </div>
 
             <!-- Card: 投資 -->
-            <div class="group-wrapper" v-if="totalInvestments > 0">
+            <div class="group-wrapper" v-if="investments.length > 0">
               <div class="group-header-card" :class="{ 'expanded-header bg-invest': listExpanded.invest }" @click="toggleListExpand('invest')" style="cursor: pointer;">
                 <div class="card-header-main-row">
                   <span class="group-title-text" :class="{ 'text-dark': !listExpanded.invest, 'text-white': listExpanded.invest }">投資</span>
@@ -4224,7 +4224,7 @@ onUnmounted(() => {
             </div>
 
             <!-- Card: 固定資產 -->
-            <div class="group-wrapper" v-if="totalFixedAssets > 0">
+            <div class="group-wrapper" v-if="filteredAccounts('fixed').length > 0">
               <div class="group-header-card" :class="{ 'expanded-header bg-fixed': listExpanded.fixed }" @click="toggleListExpand('fixed')" style="cursor: pointer;">
                 <div class="card-header-main-row">
                   <span class="group-title-text" :class="{ 'text-dark': !listExpanded.fixed, 'text-white': listExpanded.fixed }">固定資產</span>
@@ -4286,7 +4286,7 @@ onUnmounted(() => {
             </div>
 
             <!-- Card: 應收款 -->
-            <div class="group-wrapper" v-if="totalReceivables > 0">
+            <div class="group-wrapper" v-if="filteredAccounts('receivable').length > 0">
               <div class="group-header-card" :class="{ 'expanded-header bg-receivable': listExpanded.receivable }" @click="toggleListExpand('receivable')" style="cursor: pointer;">
                 <div class="card-header-main-row">
                   <span class="group-title-text" :class="{ 'text-dark': !listExpanded.receivable, 'text-white': listExpanded.receivable }">應收款</span>
@@ -4348,7 +4348,7 @@ onUnmounted(() => {
             </div>
 
             <!-- Card: 負債項目 -->
-            <div class="group-wrapper" v-if="totalLiabilities > 0">
+            <div class="group-wrapper" v-if="filteredAccounts('liab').length > 0">
               <div class="group-header-card" :class="{ 'expanded-header bg-liab': listExpanded.liab }" @click="toggleListExpand('liab')" style="cursor: pointer;">
                 <div class="card-header-main-row">
                   <span class="group-title-text" :class="{ 'text-dark': !listExpanded.liab, 'text-white': listExpanded.liab }">負債</span>
