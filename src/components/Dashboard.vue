@@ -808,8 +808,7 @@ const submitAdjustShares = async () => {
           let profit = 0
           if (customProfitVal.value !== '') {
             if (!customProfitAssigned) {
-              const val = Number(customProfitVal.value)
-              profit = lot.currency === 'USD' ? val / usdTwdRate.value : val
+              profit = Number(customProfitVal.value)
               customProfitAssigned = true
             } else {
               profit = 0
@@ -842,8 +841,7 @@ const submitAdjustShares = async () => {
           let profit = 0
           if (customProfitVal.value !== '') {
             if (!customProfitAssigned) {
-              const val = Number(customProfitVal.value)
-              profit = lot.currency === 'USD' ? val / usdTwdRate.value : val
+              profit = Number(customProfitVal.value)
               customProfitAssigned = true
             } else {
               profit = 0
@@ -5709,7 +5707,7 @@ onUnmounted(() => {
 
             <!-- 手動修正實現損益 (僅在賣出時顯示) -->
             <div v-if="adjustAction === 'minus'" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(0, 0, 0, 0.06); padding-bottom: 12px;">
-              <span style="color: var(--color-text-muted); font-size: 0.95rem;">手動修正實現損益 (TWD)</span>
+              <span style="color: var(--color-text-muted); font-size: 0.95rem;">手動修正實現損益 ({{ selectedInvestment.currency }})</span>
               <input v-model="customProfitVal" type="number" step="any" placeholder="留空使用預估值" class="reset-input" style="background: transparent; border: none; color: var(--color-text); font-size: 0.95rem; text-align: right; outline: none; width: 50%; padding: 0 !important; margin: 0 !important;" />
             </div>
           </div>
