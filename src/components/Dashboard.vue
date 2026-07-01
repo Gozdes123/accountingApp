@@ -896,6 +896,7 @@ const submitAdjustShares = async () => {
     }
   }
   
+  await saveDailySnapshot(netWorth.value)
   await fetchAllData()
   addModalStep.value = 4
 }
@@ -2256,7 +2257,27 @@ const trendChartOptions = computed(() => {
               if (isRoi) {
                 label += (context.parsed.y >= 0 ? '+' : '') + context.parsed.y.toFixed(2) + '%'
               } else {
-                label += isHidden.value ? '•••••• 元' : context.parsed.y.toLocaleString('zh-TW', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) + ' 元'
+                const valStr = isHidden.value ? '•••••• 元' : context.parsed.y.toLocaleString('zh-TW', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) + ' 元'
+                label += valStr
+                
+                // 計算相較於期初的成長率 (%)
+                const datasets = trendDatasets.value
+                if (datasets.length >= 2) {
+                  let firstVal = 0
+                  if (trendType.value === 'net_worth') {
+                    firstVal = context.datasetIndex === 0 ? datasets[0].netWorth : datasets[0].liabilities
+                  } else if (trendType.value === 'liquid_invest') {
+                    firstVal = context.datasetIndex === 0 ? datasets[0].liquid : datasets[0].invest
+                  }
+                  
+                  if (firstVal && firstVal !== 0) {
+                    const diff = context.parsed.y - firstVal
+                    const pct = (diff / Math.abs(firstVal)) * 100
+                    label += ` (${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%)`
+                  } else if (firstVal === 0 && context.parsed.y !== 0) {
+                    label += ' (+100.00%)'
+                  }
+                }
               }
             }
             return label
@@ -5596,7 +5617,7 @@ onUnmounted(() => {
           <!-- Change History List -->
           <div class="history-section" style="text-align: left;">
             <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(0,0,0,0.06); padding-bottom: 10px; margin-bottom: 14px;">
-              <span style="color: var(--color-text-muted); font-size: 0.9rem; font-weight: 700;">變動記錄</span>
+              <span style="color: var(--color-text-muted); font-size: 0.9rem; font-weight: 700;">現有持股明細 (Lots)</span>
               <span style="color: var(--color-text-muted); font-size: 0.85rem; cursor: pointer; opacity: 0.7;">⚙️</span>
             </div>
 
@@ -5604,13 +5625,13 @@ onUnmounted(() => {
             <div style="display: flex; flex-direction: column; gap: 14px;">
               <div v-for="lot in selectedInvestment.lots" :key="lot.id" class="history-item-row" style="display: flex; justify-content: space-between; align-items: flex-start; padding-bottom: 14px; border-bottom: 1px solid rgba(0,0,0,0.04);">
                 <div style="display: flex; flex-direction: column;">
-                  <span style="color: var(--color-text); font-size: 0.95rem; font-weight: 700;">修改餘額</span>
+                  <span style="color: var(--color-text); font-size: 0.95rem; font-weight: 700;">{{ lot.remarks || (lot.funding_account_id ? '定期定額/定期定投' : '買入持股') }}</span>
                   <span style="color: var(--color-text-muted); font-size: 0.82rem; margin-top: 4px;">持有 {{ formatInvestNumber(lot.quantity) }}, {{ lot.currency }} {{ formatInvestNumber(lot.buy_price) }}</span>
                   <span style="color: var(--color-text-muted); opacity: 0.8; font-size: 0.8rem; margin-top: 4px;">{{ formatDateDetailed(lot.buy_date || lot.created_at) }}</span>
                 </div>
                 <div style="display: flex; flex-direction: column; align-items: flex-end;">
-                  <span style="color: #2ec173; font-size: 0.95rem; font-weight: 700;">+{{ formatHistoryValue(lot.quantity * lot.current_price, lot.currency) }}</span>
-                  <span style="color: var(--color-text-muted); font-size: 0.82rem; margin-top: 4px;">餘額 {{ formatHistoryValue(lot.quantity * lot.current_price, lot.currency) }}</span>
+                  <span style="color: #2ec173; font-size: 0.95rem; font-weight: 700;">{{ formatHistoryValue(lot.quantity * lot.current_price, lot.currency) }}</span>
+                  <span style="color: var(--color-text-muted); font-size: 0.82rem; margin-top: 4px;">現值 {{ formatHistoryValue(lot.quantity * lot.current_price, lot.currency) }}</span>
                 </div>
               </div>
             </div>
