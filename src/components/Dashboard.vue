@@ -1528,8 +1528,8 @@ const moneyFlowAnalysis = computed(() => {
     Object.entries(lastDetails.accounts).forEach(([id, lastBal]) => {
       const firstBal = finalFirstAccounts[id]
       if (firstBal !== undefined) {
-        const diff = Number(lastBal) - Number(firstBal)
-        if (Math.abs(diff) > 0.01) {
+        const diff = Math.round(Number(lastBal) - Number(firstBal))
+        if (Math.abs(diff) > 0) {
           const acc = accounts.value.find(a => a.id === id)
           const name = acc ? acc.name : '未知帳戶'
           accChanges.push({ name, diff })
@@ -1555,7 +1555,7 @@ const moneyFlowAnalysis = computed(() => {
     hasSellTrades = true
     sellTxList.forEach(tx => {
       const p = Number(tx.profit || 0)
-      const pTwd = tx.currency === 'USD' ? p * usdTwdRate.value : p
+      const pTwd = Math.round(tx.currency === 'USD' ? p * usdTwdRate.value : p)
       profitSumTwd += pTwd
     })
   }
@@ -1583,7 +1583,7 @@ const moneyFlowAnalysis = computed(() => {
         if (!flows[accName]) flows[accName] = {}
         const sym = lot.symbol.toUpperCase()
         const lotCost = Number(lot.quantity || 0) * Number(lot.buy_price || lot.average_cost || 0)
-        const lotCostTwd = lot.currency === 'USD' ? lotCost * usdTwdRate.value : lotCost
+        const lotCostTwd = Math.round(lot.currency === 'USD' ? lotCost * usdTwdRate.value : lotCost)
         flows[accName][sym] = (flows[accName][sym] || 0) + lotCostTwd
       }
     })
@@ -1607,7 +1607,7 @@ const moneyFlowAnalysis = computed(() => {
         const accName = acc ? acc.name : '未知帳戶'
         if (!inflowFlows[accName]) inflowFlows[accName] = {}
         const sym = tx.symbol.toUpperCase()
-        const valTwd = Number(tx.quantity || 0) * Number(tx.price || 0) * (tx.currency === 'USD' ? usdTwdRate.value : 1)
+        const valTwd = Math.round(Number(tx.quantity || 0) * Number(tx.price || 0) * (tx.currency === 'USD' ? usdTwdRate.value : 1))
         inflowFlows[accName][sym] = (inflowFlows[accName][sym] || 0) + valTwd
       }
     })
