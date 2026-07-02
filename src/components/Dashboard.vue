@@ -422,7 +422,7 @@ const editInvestment = (inv) => {
   
   newAsset.value = {
     category: 'invest',
-    type: inv.asset_class || inv.type || 'Stock',
+    type: (inv.type && inv.type.startsWith('DCA')) ? 'Stock' : (['Stock', 'Crypto', 'Fund'].includes(inv.type) ? inv.type : 'Stock'),
     name: inv.name || '',
     symbol: inv.symbol || '',
     quantity: inv.quantity || 0,
@@ -3633,7 +3633,7 @@ const processAutoRecords = async () => {
                   quantity: quantity,
                   average_cost: price,
                   currency: isUsdStock ? 'USD' : 'TWD',
-                  type: 'Stock',
+                  type: 'DCA',
                   current_price: price,
                   buy_price: price,
                   buy_date: today.toISOString().split('T')[0],
@@ -5645,7 +5645,7 @@ onUnmounted(() => {
             <div style="display: flex; flex-direction: column; gap: 14px;">
               <div v-for="lot in selectedInvestment.lots" :key="lot.id" class="history-item-row" style="display: flex; justify-content: space-between; align-items: flex-start; padding-bottom: 14px; border-bottom: 1px solid rgba(0,0,0,0.04);">
                 <div style="display: flex; flex-direction: column;">
-                  <span style="color: var(--color-text); font-size: 0.95rem; font-weight: 700;">{{ lot.remarks || (lot.funding_account_id ? '定期定額/定期定投' : '買入持股') }}</span>
+                  <span style="color: var(--color-text); font-size: 0.95rem; font-weight: 700;">{{ lot.remarks || (lot.type === 'DCA' ? '定期定額/定期定投' : '買入持股') }}</span>
                   <span style="color: var(--color-text-muted); font-size: 0.82rem; margin-top: 4px;">持有 {{ formatInvestNumber(lot.quantity) }}, {{ lot.currency }} {{ formatInvestNumber(lot.buy_price) }}</span>
                   <span style="color: var(--color-text-muted); opacity: 0.8; font-size: 0.8rem; margin-top: 4px;">{{ formatDateDetailed(lot.buy_date || lot.created_at) }}</span>
                 </div>
