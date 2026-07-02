@@ -1407,6 +1407,47 @@ const trendDatasets = computed(() => {
   const liquidRatio = totalLiquidInvest > 0 ? todayLiquid / totalLiquidInvest : 0.5
   const investRatio = totalLiquidInvest > 0 ? todayInvest / totalLiquidInvest : 0.5
   
+  // 為了效能，在最外層只解析一次不計入圖表的 ID 對照表
+  const excludedAccs = JSON.parse(localStorage.getItem('excluded_accounts_ids') || '[]')
+  const excludedInvs = JSON.parse(localStorage.getItem('excluded_investments_ids') || '[]')
+  
+  // 動態根據當前「計入圖表」設定重新計算歷史快照點的淨值
+  const getHistoricalAmount = (r) => {
+    if (!r.details || !r.details.accounts) {
+      return r.amount // 若為老舊無詳細資料快照，則回退使用當時紀錄的值
+    }
+    
+    const liabTypes = ['Credit Card', 'Liability', 'Loan', 'Payable', 'OtherLiab']
+    let totalAcc = 0
+    Object.entries(r.details.accounts).forEach(([id, bal]) => {
+      if (!excludedAccs.includes(id)) {
+        const acc = accounts.value.find(a => a.id === id)
+        const isLiab = acc ? liabTypes.includes(acc.type) : false
+        
+        if (isLiab) {
+          totalAcc -= Math.abs(Number(bal || 0))
+        } else {
+          totalAcc += Number(bal || 0)
+        }
+      }
+    })
+    
+    let totalInv = 0
+    if (Array.isArray(r.details.investments)) {
+      r.details.investments.forEach(inv => {
+        if (!excludedInvs.includes(inv.id)) {
+          const val = Number(inv.quantity || 0) * Number(inv.current_price || 0)
+          const valTwd = inv.currency === 'USD' ? val * usdTwdRate.value : val
+          totalInv += valTwd
+        }
+      })
+    } else if (r.details.investments_value !== undefined) {
+      totalInv = Number(r.details.investments_value || 0)
+    }
+    
+    return Math.round(totalAcc + totalInv)
+  }
+
   return history.map((r, idx) => {
     // 最後一個節點強制符合當前真實數據
     if (idx === history.length - 1) {
@@ -1429,13 +1470,14 @@ const trendDatasets = computed(() => {
     
     // 方案 A：將固定資產與負債視為歷史常數，將淨資產歷史波動100%反映於可支配流動部位
     // 估算歷史上的可支配部位 (流動資金 + 投資部位)
-    const estLiquidInvest = Math.max(0, r.amount + todayLiabilities - todayFixed - todayReceivables)
+    const rAmount = getHistoricalAmount(r)
+    const estLiquidInvest = Math.max(0, rAmount + todayLiabilities - todayFixed - todayReceivables)
     const estLiquid = estLiquidInvest * liquidRatio
     const estInvest = estLiquidInvest * investRatio
     
     return {
       date: r.date,
-      netWorth: r.amount,
+      netWorth: rAmount,
       liabilities: todayLiabilities, // 負債視為常數
       liquid: estLiquid,
       invest: estInvest,
