@@ -269,6 +269,8 @@ const accounts = ref([])
 const investments = ref([])
 const historyRecords = ref([])
 const usdTwdRate = ref(32)
+const jpyTwdRate = ref(0.21)
+const isCurrencyColumnSupported = ref(false)
 const isInitialDataLoaded = ref(false)
 const isHidden = ref(true)
 const isRefreshing = ref(false)
@@ -407,7 +409,8 @@ const editAccount = (acc) => {
     remarks: acc.remarks ?? '',
     auto_record: null, // 我們改用 newAssetAutoRecords 來管理列表
     custom_group: acc.custom_group ?? '',
-    funding_account_id: null
+    funding_account_id: null,
+    currency: acc.currency || 'TWD'
   }
   
   subListType.value = null
@@ -747,10 +750,10 @@ const submitAdjustShares = async () => {
       updatedAccounts = updatedAccounts.map(acc => {
         if (acc.id === newAsset.value.funding_account_id) {
           if (adjustAction.value === 'plus') {
-            const newBal = Math.round(Number(acc.balance) - txValTwd)
-            acc.balance = newBal >= 0 ? newBal : 0
+            adjustAccountBalanceByTwd(acc, -txValTwd)
+            if (acc.balance < 0) acc.balance = 0
           } else {
-            acc.balance = Math.round(Number(acc.balance) + txValTwd)
+            adjustAccountBalanceByTwd(acc, txValTwd)
           }
           acc._dirty = true
           accountsChanged = true
@@ -950,7 +953,7 @@ const totalLiquidAssets = computed(() => {
   const liquidTypes = ['Bank', 'Cash', 'E-Wallet', 'OtherLiquid']
   return accounts.value
     .filter(a => liquidTypes.includes(a.type) && a.include_in_chart !== false)
-    .reduce((sum, acc) => sum + Math.abs(Number(acc.balance)), 0)
+    .reduce((sum, acc) => sum + getAccountBalanceTwd(acc), 0)
 })
 
 // 2. 投資部位市值
@@ -970,14 +973,14 @@ const totalFixedAssets = computed(() => {
   const fixedTypes = ['RealEstate', 'Car', 'OtherFixed', 'Other'] // Include fallback type 'Other'
   return accounts.value
     .filter(a => fixedTypes.includes(a.type) && a.include_in_chart !== false)
-    .reduce((sum, acc) => sum + Math.abs(Number(acc.balance)), 0)
+    .reduce((sum, acc) => sum + getAccountBalanceTwd(acc), 0)
 })
 
 // 4. 應收款項目 (Receivable)
 const totalReceivables = computed(() => {
   return accounts.value
     .filter(a => a.type === 'Receivable' && a.include_in_chart !== false)
-    .reduce((sum, acc) => sum + Math.abs(Number(acc.balance)), 0)
+    .reduce((sum, acc) => sum + getAccountBalanceTwd(acc), 0)
 })
 
 // 5. 負債項目 (Liability / Credit Card / Loan / Payable / OtherLiab)
@@ -985,7 +988,7 @@ const totalLiabilities = computed(() => {
   const liabTypes = ['Credit Card', 'Liability', 'Loan', 'Payable', 'OtherLiab']
   return accounts.value
     .filter(a => liabTypes.includes(a.type) && a.include_in_chart !== false)
-    .reduce((sum, acc) => sum + Math.abs(Number(acc.balance)), 0)
+    .reduce((sum, acc) => sum + getAccountBalanceTwd(acc), 0)
 })
 
 // 6. 總淨資產 = 流動資金 + 投資部位 + 固定資產 + 應收款 - 負債
@@ -1277,6 +1280,23 @@ const getCategoryTotal = (category) => {
   return 0
 }
 
+function getAccountBalanceTwd(acc) {
+  if (!acc) return 0
+  const bal = Math.abs(Number(acc.balance || 0))
+  const currency = acc.currency || 'TWD'
+  const rate = currency === 'USD' ? usdTwdRate.value : (currency === 'JPY' ? jpyTwdRate.value : 1)
+  return Math.round(bal * rate)
+}
+
+function adjustAccountBalanceByTwd(acc, amountTwd) {
+  if (!acc) return
+  const currency = acc.currency || 'TWD'
+  const rate = currency === 'USD' ? usdTwdRate.value : (currency === 'JPY' ? jpyTwdRate.value : 1)
+  const amtInAccCurrency = amountTwd / rate
+  const currentBal = Number(acc.balance || 0)
+  acc.balance = Math.round(currentBal + amtInAccCurrency)
+}
+
 const getCategoryFlatList = (category) => {
   const result = []
   const grouped = groupAccountsByCustomGroup(category)
@@ -1284,7 +1304,7 @@ const getCategoryFlatList = (category) => {
   
   grouped.forEach(g => {
     if (g.name !== '') {
-      const groupTotal = g.items.reduce((sum, item) => sum + item.balance, 0)
+      const groupTotal = g.items.reduce((sum, item) => sum + getAccountBalanceTwd(item), 0)
       const pct = catTotal > 0 ? (groupTotal / catTotal) * 100 : 0
       result.push({
         isGroup: true,
@@ -1297,13 +1317,14 @@ const getCategoryFlatList = (category) => {
       })
     } else {
       g.items.forEach(item => {
-        const itemPct = catTotal > 0 ? (item.balance / catTotal) * 100 : 0
+        const balanceTwd = getAccountBalanceTwd(item)
+        const itemPct = catTotal > 0 ? (balanceTwd / catTotal) * 100 : 0
         result.push({
           isGroup: false,
           name: item.name,
           category,
           percentage: itemPct,
-          balance: item.balance,
+          balance: balanceTwd,
           desc: translateTypeSettings(item.type),
           rawItem: item
         })
@@ -2440,11 +2461,13 @@ const fetchAllData = async () => {
   const cachedAccs = localStorage.getItem('local_accounts')
   const cachedInvs = localStorage.getItem('local_investments')
   const cachedRate = localStorage.getItem('cached_usd_twd_rate')
+  const cachedJpyRate = localStorage.getItem('cached_jpy_twd_rate')
   
   if (cachedAccs || cachedInvs) {
     if (cachedAccs) accounts.value = JSON.parse(cachedAccs)
     if (cachedInvs) investments.value = JSON.parse(cachedInvs)
     if (cachedRate) usdTwdRate.value = Number(cachedRate)
+    if (cachedJpyRate) jpyTwdRate.value = Number(cachedJpyRate)
     mergeExclusionSettings()
     isInitialDataLoaded.value = true
   }
@@ -2454,9 +2477,13 @@ const fetchAllData = async () => {
     const res = await fetch('https://api.exchangerate-api.com/v4/latest/USD')
     const rateData = await res.json()
     usdTwdRate.value = rateData.rates?.TWD ?? 32
+    const usdJpy = rateData.rates?.JPY ?? 158
+    jpyTwdRate.value = usdTwdRate.value / usdJpy
     localStorage.setItem('cached_usd_twd_rate', usdTwdRate.value.toString())
+    localStorage.setItem('cached_jpy_twd_rate', jpyTwdRate.value.toString())
   } catch {
     if (!cachedRate) usdTwdRate.value = 32
+    if (!cachedJpyRate) jpyTwdRate.value = 0.21
   }
 
   // 清除快取中舊有的 Mock 資料
@@ -3049,8 +3076,8 @@ const addAssetItem = async () => {
         
         updatedAccounts = updatedAccounts.map(acc => {
           if (acc.id === newAsset.value.funding_account_id) {
-            const newBal = Math.round(Number(acc.balance) - costTwd)
-            acc.balance = newBal >= 0 ? newBal : 0
+            adjustAccountBalanceByTwd(acc, -costTwd)
+            if (acc.balance < 0) acc.balance = 0
             acc._dirty = true
             accountsChanged = true
           }
@@ -3170,7 +3197,8 @@ const addAssetItem = async () => {
         remarks: newAsset.value.remarks ?? '',
         auto_record: newAssetAutoRecords.value.length > 0 ? JSON.parse(JSON.stringify(newAssetAutoRecords.value)) : null,
         created_at: isEditing.value ? (accounts.value.find(a => a.id === editingId.value)?.created_at || nowStr) : nowStr,
-        custom_group: newAsset.value.custom_group || ''
+        custom_group: newAsset.value.custom_group || '',
+        currency: newAsset.value.currency || 'TWD'
       }
       
       const dbPayload = {
@@ -3179,6 +3207,10 @@ const addAssetItem = async () => {
         balance: payload.balance,
         custom_group: payload.custom_group,
         auto_record: payload.auto_record
+      }
+      
+      if (isCurrencyColumnSupported.value) {
+        dbPayload.currency = payload.currency
       }
       
       if (isEditing.value) {
@@ -3508,6 +3540,7 @@ const selectProvider = (item) => {
   newAsset.value.include_in_chart = true
   newAsset.value.remarks = ''
   newAsset.value.auto_record = null
+  newAsset.value.currency = 'TWD'
   newAssetAutoRecords.value = []
   verificationResult.value = null
 
@@ -3597,6 +3630,8 @@ const processAutoRecords = async () => {
         }
         
         const day = Number(ar.day || 1)
+        const lastDayOfCurrentMonth = new Date(currentYear, currentMonth + 1, 0).getDate()
+        const effectiveDay = Math.min(day, lastDayOfCurrentMonth)
         
         let lastProcessedYear = 0
         let lastProcessedMonth = -1
@@ -3609,21 +3644,21 @@ const processAutoRecords = async () => {
         
         const isCurrentMonthProcessed = (lastProcessedYear === currentYear && lastProcessedMonth === currentMonth)
         
-        if (currentDay >= day && !isCurrentMonthProcessed) {
+        if (currentDay >= effectiveDay && !isCurrentMonthProcessed) {
           const amount = Number(ar.amount || 0)
           const type = ar.type
           
           if (type === 'income') {
-            acc.balance += amount
+            adjustAccountBalanceByTwd(acc, amount)
             showToast(`自動記帳：${acc.name} 固定收入 TWD ${amount}`)
           } else if (type === 'expense') {
-            acc.balance -= amount
+            adjustAccountBalanceByTwd(acc, -amount)
             if (acc.balance < 0) acc.balance = 0
             showToast(`自動記帳：${acc.name} 固定支出 TWD ${amount}`)
           } else if (type === 'transfer') {
             const targetAcc = updatedAccounts.find(a => a.id === ar.target_account_id)
             if (targetAcc) {
-              acc.balance -= amount
+              adjustAccountBalanceByTwd(acc, -amount)
               if (acc.balance < 0) acc.balance = 0
               
               // 如果轉入的目標帳戶是負債類（如：房貸、信貸、信用卡），轉帳代表還款，應減少負債餘額
@@ -3631,21 +3666,22 @@ const processAutoRecords = async () => {
               if (liabTypes.includes(targetAcc.type)) {
                 // 如果設定了年利率，先算利息支出，剩下的才是還本金
                 if (ar.interest_rate && Number(ar.interest_rate) > 0) {
+                  const targetBalanceTwd = getAccountBalanceTwd(targetAcc)
                   const rate = Number(ar.interest_rate)
-                  const monthlyInterest = Math.round(targetAcc.balance * (rate / 100) / 12)
-                  const principalPaid = Math.max(0, amount - monthlyInterest)
+                  const monthlyInterestTwd = Math.round(targetBalanceTwd * (rate / 100) / 12)
+                  const principalPaidTwd = Math.max(0, amount - monthlyInterestTwd)
                   
-                  targetAcc.balance -= principalPaid
+                  adjustAccountBalanceByTwd(targetAcc, -principalPaidTwd)
                   if (targetAcc.balance < 0) targetAcc.balance = 0
                   
-                  showToast(`自動還款：${acc.name} ➡️ ${targetAcc.name} (本金 -${principalPaid}, 利息 -${monthlyInterest})`)
+                  showToast(`自動還款：${acc.name} ➡️ ${targetAcc.name} (本金 -${principalPaidTwd}, 利息 -${monthlyInterestTwd})`)
                 } else {
-                  targetAcc.balance -= amount
+                  adjustAccountBalanceByTwd(targetAcc, -amount)
                   if (targetAcc.balance < 0) targetAcc.balance = 0
                   showToast(`自動轉帳：從 ${acc.name} 轉帳至 ${targetAcc.name} TWD ${amount}`)
                 }
               } else {
-                targetAcc.balance += amount
+                adjustAccountBalanceByTwd(targetAcc, amount)
                 showToast(`自動轉帳：從 ${acc.name} 轉帳至 ${targetAcc.name} TWD ${amount}`)
               }
               
@@ -3662,8 +3698,8 @@ const processAutoRecords = async () => {
 
             const arCurrency = ar.currency || 'TWD'
             const deductTwd = Math.round(arCurrency === 'USD' ? amount * (usdTwdRate.value || 30) : amount)
-            const newBal = Math.round(acc.balance - deductTwd)
-            acc.balance = newBal >= 0 ? newBal : 0
+            adjustAccountBalanceByTwd(acc, -deductTwd)
+            if (acc.balance < 0) acc.balance = 0
             
             const symbol = (ar.symbol || '').trim().toUpperCase()
             if (symbol) {
@@ -4008,6 +4044,11 @@ let focusListener = null
 let visibilityListener = null
 
 onMounted(() => {
+  // 檢查資料庫是否支援 accounts 欄位中的 currency 欄位
+  supabase.from('accounts').select('currency').limit(1).then(({ error }) => {
+    isCurrencyColumnSupported.value = !error
+  })
+  
   fetchAllData()
   
   focusListener = () => {
@@ -4181,7 +4222,12 @@ onUnmounted(() => {
                               <component :is="getTypeIconAndColor(item.rawItem.type).icon" :style="{ color: getTypeIconAndColor(item.rawItem.type).color }" size="16" weight="duotone" />
                               <span class="sub-item-name" style="font-weight: 600; color: var(--color-text);">{{ item.name }}</span>
                             </div>
-                            <div class="sub-item-desc">{{ item.desc }}</div>
+                            <div class="sub-item-desc">
+                              {{ item.desc }}
+                              <span v-if="item.rawItem.currency && item.rawItem.currency !== 'TWD'" style="color: var(--color-text-muted); opacity: 0.8; margin-left: 6px; font-weight: 600;">
+                                ({{ item.rawItem.currency }} {{ formatInvestNumber(item.rawItem.balance) }})
+                              </span>
+                            </div>
                           </template>
                         </div>
 
@@ -5363,8 +5409,24 @@ onUnmounted(() => {
                 <span class="row-label">金額</span>
                 <div class="row-value-wrapper">
                   <input v-model.number="newAsset.balance" type="number" placeholder="0" class="input-flat-right" />
-                  <span class="currency-badge">TWD</span>
+                  <span class="currency-badge" style="background: rgba(92, 103, 245, 0.1); color: #5c67f5; padding: 4px 8px; border-radius: 6px; font-size: 0.75rem; font-weight: 700;">
+                    {{ newAsset.currency || 'TWD' }}
+                  </span>
                 </div>
+              </div>
+              <div class="form-item-row" style="position: relative;">
+                <span class="row-label">幣別</span>
+                <div class="row-value-wrapper">
+                  <span class="display-val" style="color: var(--color-text); font-size: 0.95rem; font-weight: 700;">
+                    {{ newAsset.currency || 'TWD' }}
+                  </span>
+                  <PhCaretRight size="16" class="caret-indicator" />
+                </div>
+                <select v-model="newAsset.currency" class="invisible-select">
+                  <option value="TWD">TWD (新台幣)</option>
+                  <option value="USD">USD (美金)</option>
+                  <option value="JPY">JPY (日幣)</option>
+                </select>
               </div>
               <div class="form-item-row">
                 <span class="row-label">自定名稱</span>
@@ -5594,7 +5656,7 @@ onUnmounted(() => {
                 <PhCaretRight size="16" class="chevron-icon" />
               </div>
               <select v-model.number="activeAutoRecord.day" class="invisible-select">
-                <option v-for="d in 28" :key="d" :value="d">每月{{ d }}日</option>
+                <option v-for="d in 31" :key="d" :value="d">每月{{ d }}日</option>
               </select>
             </div>
 
