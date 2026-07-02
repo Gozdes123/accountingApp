@@ -1503,8 +1503,8 @@ const moneyFlowAnalysis = computed(() => {
   const first = datasets[0]
   const last = datasets[datasets.length - 1]
   
-  const liqDiff = last.liquid - first.liquid
-  const invDiff = last.invest - first.invest
+  const liqDiff = Math.round(last.liquid - first.liquid)
+  const invDiff = Math.round(last.invest - first.invest)
   
   const firstDetails = first.details || {}
   const lastDetails = last.details || {}
@@ -1592,6 +1592,8 @@ const moneyFlowAnalysis = computed(() => {
       const detailStr = Object.entries(stocks).map(([sym, cost]) => `${sym} (${formatInvestNumber(cost)} 元)`).join('、')
       flowItems.push({
         type: 'buy',
+        accountName: accName,
+        stockDetails: detailStr,
         text: `從 [${accName}] 流入股市：${detailStr}`
       })
     })
@@ -1616,6 +1618,8 @@ const moneyFlowAnalysis = computed(() => {
       const detailStr = Object.entries(stocks).map(([sym, val]) => `${sym} (${formatInvestNumber(val)} 元)`).join('、')
       flowItems.push({
         type: 'sell',
+        accountName: accName,
+        stockDetails: detailStr,
         text: `賣出變現匯入 [${accName}]：${detailStr}`
       })
     })
@@ -1666,7 +1670,7 @@ const moneyFlowAnalysis = computed(() => {
   if (liqDiff >= 0 && invDiff >= 0) {
     return {
       type: 'growth',
-      title: '資產雙重成長',
+      title: '資產流動紀錄',
       icon: '📈',
       summary: `本期流動資金增加 ${formatInvestNumber(liqDiff)} 元，投資部位成長 ${formatInvestNumber(invDiff)} 元。`,
       tradeProfitText,
@@ -4716,25 +4720,38 @@ onUnmounted(() => {
             backdrop-filter: blur(8px);
           "
         >
-          <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
-            <span style="font-size: 1.1rem;">{{ moneyFlowAnalysis.icon }}</span>
-            <span style="font-size: 0.88rem; font-weight: 700; color: var(--color-text);">{{ moneyFlowAnalysis.title }}</span>
-          </div>
-          <p style="font-size: 0.82rem; line-height: 1.6; color: var(--color-text-muted); margin: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;">
-            <span style="flex: 1; min-width: 200px;">
-              {{ moneyFlowAnalysis.summary }}
-              <span v-if="moneyFlowAnalysis.tradeProfitText" style="color: var(--color-primary); font-weight: 700; margin-left: 4px;">{{ moneyFlowAnalysis.tradeProfitText }}</span>
-            </span>
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <div style="width: 28px; height: 28px; border-radius: 8px; background: rgba(92, 103, 245, 0.08); display: flex; align-items: center; justify-content: center; color: var(--color-primary);">
+                <component 
+                  :is="
+                    moneyFlowAnalysis.type === 'growth' ? PhCoins :
+                    moneyFlowAnalysis.type === 'outflow' ? PhMinusCircle :
+                    moneyFlowAnalysis.type === 'cashout' ? PhBank : PhTrendUp
+                  " 
+                  size="16" 
+                  weight="bold" 
+                />
+              </div>
+              <span style="font-size: 0.88rem; font-weight: 700; color: var(--color-text);">{{ moneyFlowAnalysis.title }}</span>
+            </div>
             <button 
               @click="showFlowAnalysisModal = true"
-              style="background: rgba(92, 103, 245, 0.1); border: none; border-radius: 50%; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; color: #5c67f5; cursor: pointer; font-size: 0.9rem; font-weight: bold; transition: all 0.2s; outline: none;"
-              onmouseover="this.style.transform='scale(1.1)'"
-              onmouseout="this.style.transform='scale(1)'"
-              title="查看詳細收支與投資金流明細"
+              style="background: rgba(92, 103, 245, 0.08); border: none; border-radius: 8px; padding: 6px 12px; display: flex; align-items: center; gap: 6px; color: #5c67f5; cursor: pointer; font-size: 0.78rem; font-weight: 700; transition: all 0.2s; outline: none;"
             >
-              ℹ️
+              <span>明細</span>
+              <PhInfo size="14" weight="bold" />
             </button>
-          </p>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 12px;">
+            <p style="font-size: 0.82rem; line-height: 1.5; color: var(--color-text-muted); margin: 0;">
+              {{ moneyFlowAnalysis.summary }}
+            </p>
+            <div v-if="moneyFlowAnalysis.tradeProfitText" style="display: flex; align-items: center; gap: 6px; font-size: 0.78rem; color: var(--color-primary); font-weight: 600;">
+              <span style="opacity: 0.6;">•</span>
+              <span>{{ moneyFlowAnalysis.tradeProfitText.replace('（', '').replace('）', '') }}</span>
+            </div>
+          </div>
         </div>
 
         <!-- Custom Date Picker Row -->
@@ -6318,8 +6335,16 @@ onUnmounted(() => {
         <div class="modal-content-full" v-if="moneyFlowAnalysis">
           <!-- Premium Summary Header -->
           <div style="display: flex; flex-direction: column; align-items: center; text-align: center; margin: 24px 0 32px 0;">
-            <div style="width: 64px; height: 64px; border-radius: 50%; background: rgba(92,103,245,0.08); display: flex; align-items: center; justify-content: center; font-size: 2.2rem; margin-bottom: 16px; border: 1px solid rgba(92,103,245,0.15);">
-              {{ moneyFlowAnalysis.icon }}
+            <div style="width: 64px; height: 64px; border-radius: 20px; background: rgba(92,103,245,0.08); display: flex; align-items: center; justify-content: center; color: var(--color-primary); margin-bottom: 16px; border: 1px solid rgba(92,103,245,0.15);">
+              <component 
+                :is="
+                  moneyFlowAnalysis.type === 'growth' ? PhCoins :
+                  moneyFlowAnalysis.type === 'outflow' ? PhMinusCircle :
+                  moneyFlowAnalysis.type === 'cashout' ? PhBank : PhTrendUp
+                " 
+                size="32" 
+                weight="duotone" 
+              />
             </div>
             <div style="font-size: 1.35rem; font-weight: 800; color: var(--color-text);">{{ moneyFlowAnalysis.title }}</div>
             <div style="font-size: 0.92rem; color: var(--color-text-muted); margin-top: 8px; line-height: 1.5; padding: 0 16px;">
@@ -6330,15 +6355,24 @@ onUnmounted(() => {
           <!-- Realized profit/loss badge if any -->
           <div 
             v-if="moneyFlowAnalysis.tradeProfitText" 
-            style="margin-bottom: 28px; border-radius: 16px; padding: 14px 18px; display: flex; align-items: center; gap: 10px;"
+            style="margin-bottom: 28px; border-radius: 16px; padding: 14px 18px; display: flex; align-items: center; gap: 12px;"
             :style="{ 
               background: moneyFlowAnalysis.tradeProfitText.includes('獲利') ? 'rgba(46, 189, 89, 0.06)' : 'rgba(255, 69, 58, 0.06)', 
-              border: moneyFlowAnalysis.tradeProfitText.includes('獲利') ? '1px solid rgba(46, 189, 89, 0.15)' : '1px solid rgba(255, 69, 58, 0.15)' 
+              border: moneyFlowAnalysis.tradeProfitText.includes('獲利') ? '1px solid rgba(46, 189, 89, 0.12)' : '1px solid rgba(255, 69, 58, 0.12)' 
             }"
           >
-            <span style="font-size: 1.25rem;">💰</span>
+            <div 
+              style="width: 36px; height: 36px; border-radius: 10px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;"
+              :style="{
+                background: moneyFlowAnalysis.tradeProfitText.includes('獲利') ? 'rgba(46, 189, 89, 0.1)' : 'rgba(255, 69, 58, 0.1)',
+                color: moneyFlowAnalysis.tradeProfitText.includes('獲利') ? '#2ebd59' : '#ff453a'
+              }"
+            >
+              <PhTrendUp v-if="moneyFlowAnalysis.tradeProfitText.includes('獲利')" size="20" weight="bold" />
+              <PhMinusCircle v-else size="20" weight="bold" />
+            </div>
             <div style="display: flex; flex-direction: column; text-align: left;">
-              <span style="font-size: 0.72rem; color: var(--color-text-muted); font-weight: bold; letter-spacing: 0.5px;">本期交易損益</span>
+              <span style="font-size: 0.72rem; color: var(--color-text-muted); font-weight: bold; letter-spacing: 0.5px; text-transform: uppercase;">本期交易損益</span>
               <span 
                 style="font-size: 0.95rem; font-weight: 800; margin-top: 2px;"
                 :style="{ color: moneyFlowAnalysis.tradeProfitText.includes('獲利') ? '#2ebd59' : '#ff453a' }"
@@ -6350,7 +6384,10 @@ onUnmounted(() => {
 
           <!-- Section 1: Accounts Flow using native settings-table items -->
           <div v-if="moneyFlowAnalysis.accountsFlow && moneyFlowAnalysis.accountsFlow.length > 0" style="margin-bottom: 32px; text-align: left;">
-            <div style="font-size: 0.82rem; font-weight: bold; color: var(--color-text-muted); margin-bottom: 12px; letter-spacing: 0.5px; text-transform: uppercase;">🏦 帳戶餘額變動</div>
+            <div style="font-size: 0.82rem; font-weight: bold; color: var(--color-text-muted); margin-bottom: 12px; letter-spacing: 0.5px; text-transform: uppercase; display: flex; align-items: center; gap: 6px;">
+              <PhBank size="16" weight="bold" />
+              <span>帳戶餘額變動</span>
+            </div>
             <div class="settings-table-list" style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); border-radius: 16px; padding: 6px 12px;">
               <div v-for="ac in moneyFlowAnalysis.accountsFlow" :key="ac.name" class="settings-table-item" style="cursor: default; padding: 12px 6px;">
                 <div class="item-meta">
@@ -6367,7 +6404,10 @@ onUnmounted(() => {
 
           <!-- Section 2: Invest Flow using custom design-rich row cards -->
           <div v-if="moneyFlowAnalysis.investFlow && moneyFlowAnalysis.investFlow.length > 0" style="margin-bottom: 32px; text-align: left;">
-            <div style="font-size: 0.82rem; font-weight: bold; color: var(--color-text-muted); margin-bottom: 12px; letter-spacing: 0.5px; text-transform: uppercase;">📈 投資資金流向軌跡</div>
+            <div style="font-size: 0.82rem; font-weight: bold; color: var(--color-text-muted); margin-bottom: 12px; letter-spacing: 0.5px; text-transform: uppercase; display: flex; align-items: center; gap: 6px;">
+              <PhCoins size="16" weight="bold" />
+              <span>投資資金流向軌跡</span>
+            </div>
             <div style="display: flex; flex-direction: column; gap: 12px;">
               <div v-for="(item, idx) in moneyFlowAnalysis.investFlow" :key="idx" 
                    style="display: flex; align-items: center; gap: 14px; padding: 14px 16px; border-radius: 16px; border: 1px solid;"
@@ -6375,19 +6415,25 @@ onUnmounted(() => {
                      background: item.type === 'sell' ? 'rgba(46, 189, 89, 0.05)' : 'rgba(92, 103, 245, 0.05)',
                      borderColor: item.type === 'sell' ? 'rgba(46, 189, 89, 0.12)' : 'rgba(92, 103, 245, 0.12)'
                    }">
-                <div style="width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 1.1rem; flex-shrink: 0;"
+                <div style="width: 32px; height: 32px; border-radius: 10px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;"
                      :style="{
-                       background: item.type === 'sell' ? 'rgba(46, 189, 89, 0.1)' : 'rgba(92, 103, 245, 0.1)',
+                       background: item.type === 'sell' ? 'rgba(46, 189, 89, 0.08)' : 'rgba(92, 103, 245, 0.08)',
                        color: item.type === 'sell' ? '#2ebd59' : '#5c67f5'
                      }">
-                  {{ item.type === 'sell' ? '📥' : '📤' }}
+                  <PhPlus v-if="item.type === 'sell'" size="16" weight="bold" />
+                  <PhCoins v-else size="16" weight="bold" />
                 </div>
                 <div style="display: flex; flex-direction: column; text-align: left;">
                   <span style="font-size: 0.88rem; font-weight: 700; color: var(--color-text);">
                     {{ item.type === 'sell' ? '賣出變現匯入' : '資金流入股市' }}
                   </span>
-                  <span style="font-size: 0.82rem; color: var(--color-text-muted); margin-top: 2px;">
-                    {{ item.text.split('：')[1] || item.text }}
+                  <span style="font-size: 0.82rem; color: var(--color-text-muted); margin-top: 4px; font-weight: 500;">
+                    <template v-if="item.type === 'buy'">
+                      從 <strong style="color: var(--color-text);">{{ item.accountName }}</strong> 流出 ➡️ <span style="color: var(--color-primary); font-weight: 600;">{{ item.stockDetails }}</span>
+                    </template>
+                    <template v-else>
+                      變現 <span style="color: #2ebd59; font-weight: 600;">{{ item.stockDetails }}</span> ➡️ 匯入 <strong style="color: var(--color-text);">{{ item.accountName }}</strong>
+                    </template>
                   </span>
                 </div>
               </div>
