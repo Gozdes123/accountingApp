@@ -747,10 +747,10 @@ const submitAdjustShares = async () => {
       updatedAccounts = updatedAccounts.map(acc => {
         if (acc.id === newAsset.value.funding_account_id) {
           if (adjustAction.value === 'plus') {
-            const newBal = Number(acc.balance) - txValTwd
+            const newBal = Math.round(Number(acc.balance) - txValTwd)
             acc.balance = newBal >= 0 ? newBal : 0
           } else {
-            acc.balance = Number(acc.balance) + txValTwd
+            acc.balance = Math.round(Number(acc.balance) + txValTwd)
           }
           acc._dirty = true
           accountsChanged = true
@@ -2445,6 +2445,23 @@ const fetchAllData = async () => {
     loadedAccounts = JSON.parse(localStorage.getItem('local_accounts') || '[]')
   }
   
+  // Sanitizer: Ensure no account balance has decimals (self-healing for legacy/float data)
+  let accountsChangedLocally = false
+  loadedAccounts.forEach(acc => {
+    const rounded = Math.round(Number(acc.balance || 0))
+    if (acc.balance !== rounded) {
+      acc.balance = rounded
+      accountsChangedLocally = true
+      // Push update async to database
+      supabase.from('accounts').update({ balance: rounded }).eq('id', acc.id)
+        .then(({ error }) => {
+          if (error) console.warn(`Failed to sanitize balance for account ${acc.name}:`, error)
+        })
+    }
+  })
+  if (accountsChangedLocally) {
+    localStorage.setItem('local_accounts', JSON.stringify(loadedAccounts))
+  }
   accounts.value = loadedAccounts
 
   // 4. 背景獲取最新投資資料 (Supabase)
@@ -2986,7 +3003,7 @@ const addAssetItem = async () => {
         
         updatedAccounts = updatedAccounts.map(acc => {
           if (acc.id === newAsset.value.funding_account_id) {
-            const newBal = Number(acc.balance) - costTwd
+            const newBal = Math.round(Number(acc.balance) - costTwd)
             acc.balance = newBal >= 0 ? newBal : 0
             acc._dirty = true
             accountsChanged = true
@@ -3598,9 +3615,9 @@ const processAutoRecords = async () => {
             }
 
             const arCurrency = ar.currency || 'TWD'
-            const deductTwd = arCurrency === 'USD' ? amount * (usdTwdRate.value || 30) : amount
-            acc.balance -= deductTwd
-            if (acc.balance < 0) acc.balance = 0
+            const deductTwd = Math.round(arCurrency === 'USD' ? amount * (usdTwdRate.value || 30) : amount)
+            const newBal = Math.round(acc.balance - deductTwd)
+            acc.balance = newBal >= 0 ? newBal : 0
             
             const symbol = (ar.symbol || '').trim().toUpperCase()
             if (symbol) {
