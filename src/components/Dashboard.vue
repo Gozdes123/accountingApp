@@ -7657,13 +7657,15 @@ onUnmounted(() => {
   border: none;
   background: transparent !important;
   color: var(--color-text-muted) !important;
-  font-size: 0.95rem;
+  font-size: 0.82rem;
   font-weight: 700;
   height: 38px;
   border-radius: 9px;
   cursor: pointer;
   transition: all 0.2s ease;
   box-shadow: none !important;
+  white-space: nowrap;
+  padding: 0 4px !important;
 }
 
 .seg-btn.active-income.active {
