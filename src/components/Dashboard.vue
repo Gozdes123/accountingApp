@@ -48,10 +48,62 @@ const shareStats = () => {
 }
 
 const statsChartData = computed(() => {
-  const months = ['1月', '2月', '3月', '4月', '5月', '6月']
+  // 1. 動態計算最近 6 個月的標籤與年/月對照 (例如 2月, 3月, 4月, 5月, 6月, 7月)
+  const today = new Date()
+  const months = []
+  const monthKeys = []
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(today.getFullYear(), today.getMonth() - i, 1)
+    months.push(`${d.getMonth() + 1}月`)
+    monthKeys.push({ year: d.getFullYear(), month: d.getMonth() })
+  }
   
   if (statsType.value === 'invest') {
-    const totalPnL = investments.value.reduce((sum, item) => {
+    // 獲取最近 6 個月歷史持倉成本與累計盈虧的真實數據
+    const costData = []
+    const pnlData = []
+    
+    monthKeys.forEach(({ year, month }) => {
+      // 找出該年該月在 historyRecords 中的最後一筆快照紀錄
+      const monthRecords = historyRecords.value.filter(r => {
+        const d = new Date(r.date)
+        return d.getFullYear() === year && d.getMonth() === month
+      })
+      
+      let cost = 0
+      let pnl = 0
+      
+      if (monthRecords.length > 0) {
+        const lastRec = monthRecords[monthRecords.length - 1]
+        let valTwd = 0
+        let costTwd = 0
+        
+        if (lastRec.details) {
+          if (Array.isArray(lastRec.details.investments)) {
+            // 從快照詳細明細中加總
+            lastRec.details.investments.forEach(inv => {
+              const val = Number(inv.quantity || 0) * Number(inv.current_price || 0)
+              const c = Number(inv.quantity || 0) * Number(inv.average_cost || 0)
+              const rate = inv.currency === 'USD' ? usdTwdRate.value : 1
+              valTwd += val * rate
+              costTwd += c * rate
+            })
+          } else {
+            // 相容舊有格式
+            valTwd = Number(lastRec.details.investments_value || 0)
+            costTwd = Number(lastRec.details.investments_cost || 0)
+          }
+        }
+        cost = Math.round(costTwd)
+        pnl = Math.round(valTwd - costTwd)
+      }
+      
+      costData.push(cost)
+      pnlData.push(pnl)
+    })
+    
+    // 如果當月（最後一個月）還沒有寫入資料庫快照，強制與當前最即時的實際數據對齊，避免顯示為 0
+    const activePnL = investments.value.reduce((sum, item) => {
       const qty = Number(item.quantity || 0)
       const current = Number(item.current_price || 0)
       const cost = Number(item.buy_price || item.average_cost || 0)
@@ -60,7 +112,7 @@ const statsChartData = computed(() => {
       return sum + (currency === 'USD' ? raw * usdTwdRate.value : raw)
     }, 0)
     
-    const totalInvestmentsCost = investments.value.reduce((sum, item) => {
+    const activeCost = investments.value.reduce((sum, item) => {
       const qty = Number(item.quantity || 0)
       const cost = Number(item.buy_price || item.average_cost || 0)
       const raw = qty * cost
@@ -68,20 +120,20 @@ const statsChartData = computed(() => {
       return sum + (currency === 'USD' ? raw * usdTwdRate.value : raw)
     }, 0)
     
-    const accountChangeData = [0, 0, 0, 0, 0, totalInvestmentsCost]
-    const pnlData = [0, 0, 0, 0, 0, totalPnL]
+    costData[5] = Math.round(activeCost)
+    pnlData[5] = Math.round(activePnL)
     
     return {
       labels: months,
       datasets: [
         {
-          label: '帳戶改變',
+          label: '持倉成本',
           backgroundColor: '#ccd7f5',
           borderRadius: 8,
-          data: accountChangeData
+          data: costData
         },
         {
-          label: '持倉盈虧',
+          label: '累計盈虧',
           backgroundColor: '#5c67f5',
           borderRadius: 8,
           data: pnlData
@@ -89,6 +141,8 @@ const statsChartData = computed(() => {
       ]
     }
   } else {
+    // statsType === 'liquid'
+    // 取得當前設定的所有定期定額/定期記帳預估總額
     let monthlyIncome = 0
     let monthlyExpense = 0
     accounts.value.forEach(acc => {
@@ -101,45 +155,42 @@ const statsChartData = computed(() => {
         }
         records.forEach(ar => {
           if (ar.enabled) {
-            // Expiry check
-            if (ar.expiry === 'custom' && ar.expiry_date) {
-              const expDate = new Date(ar.expiry_date + 'T23:59:59')
-              if (new Date() > expDate) return
+            const arCurrency = ar.currency || 'TWD'
+            let amtTwd = Number(ar.amount || 0)
+            if (arCurrency === 'USD') {
+              amtTwd = amtTwd * usdTwdRate.value
+            } else if (arCurrency === 'JPY') {
+              amtTwd = amtTwd * (jpyTwdRate.value || 0.22)
             }
-            // Creation check (若本月的記帳日早於創建時間，代表本月不執行，不計入本月圖表)
-            if (ar.created_at) {
-              const today = new Date()
-              const scheduledDate = new Date(today.getFullYear(), today.getMonth(), Number(ar.day || 1))
-              if (new Date(ar.created_at) > scheduledDate) return
-            }
+            
             if (ar.type === 'income') {
-              monthlyIncome += Number(ar.amount || 0)
+              monthlyIncome += amtTwd
             } else if (ar.type === 'expense' || ar.type === 'dca_invest') {
-              monthlyExpense += Number(ar.amount || 0)
+              monthlyExpense += amtTwd
             }
           }
         })
       }
     })
     
-    const finalIncome = monthlyIncome
-    const finalExpense = monthlyExpense
+    const finalIncome = Math.round(monthlyIncome)
+    const finalExpense = Math.round(monthlyExpense)
     
-    const incomeData = [0, 0, 0, 0, 0, finalIncome]
-    const expenseData = [0, 0, 0, 0, 0, finalExpense]
+    const incomeData = Array(6).fill(finalIncome)
+    const expenseData = Array(6).fill(finalExpense)
     
     return {
       labels: months,
       datasets: [
         {
-          label: '收入',
+          label: '預估月收入',
           backgroundColor: '#2ebd59',
           borderRadius: 8,
           data: incomeData
         },
         {
-          label: '支出',
-          backgroundColor: '#d1d5db',
+          label: '預估月支出',
+          backgroundColor: '#e2e8f0',
           borderRadius: 8,
           data: expenseData
         }
@@ -149,6 +200,11 @@ const statsChartData = computed(() => {
 })
 
 const statsSummaryText = computed(() => {
+  const today = new Date()
+  const start = new Date(today.getFullYear(), today.getMonth() - 5, 1)
+  const end = today
+  const dynamicTitle = `${start.getFullYear()}年${start.getMonth() + 1}月至${end.getMonth() + 1}月`
+
   if (statsType.value === 'invest') {
     const totalPnL = investments.value.reduce((sum, item) => {
       const qty = Number(item.quantity || 0)
@@ -165,12 +221,11 @@ const statsSummaryText = computed(() => {
       const currency = item.currency || 'TWD'
       return sum + (currency === 'USD' ? raw * usdTwdRate.value : raw)
     }, 0)
-    const accountChange = totalInvestmentsCost
     
     return {
-      title: '2026年1月至6月',
-      desc1: `帳戶改變總計 ${formatInvestNumber(accountChange)} 元，`,
-      desc2: totalPnL === 0 ? '持倉盈虧沒有改變' : `持倉盈虧${totalPnL > 0 ? '增加' : '減少'}了 ${formatInvestNumber(Math.abs(totalPnL))} 元`
+      title: dynamicTitle,
+      desc1: `持倉成本共 ${formatInvestNumber(totalInvestmentsCost)} 元，`,
+      desc2: totalPnL === 0 ? '持倉盈虧沒有改變' : `持倉盈虧${totalPnL > 0 ? '獲利' : '虧損'}了 ${formatInvestNumber(Math.abs(totalPnL))} 元`
     }
   } else {
     let monthlyIncome = 0
@@ -196,22 +251,28 @@ const statsSummaryText = computed(() => {
               const scheduledDate = new Date(today.getFullYear(), today.getMonth(), Number(ar.day || 1))
               if (new Date(ar.created_at) > scheduledDate) return
             }
+            const arCurrency = ar.currency || 'TWD'
+            let amtTwd = Number(ar.amount || 0)
+            if (arCurrency === 'USD') {
+              amtTwd = amtTwd * usdTwdRate.value
+            } else if (arCurrency === 'JPY') {
+              amtTwd = amtTwd * (jpyTwdRate.value || 0.22)
+            }
+            
             if (ar.type === 'income') {
-              monthlyIncome += Number(ar.amount || 0)
+              monthlyIncome += amtTwd
             } else if (ar.type === 'expense' || ar.type === 'dca_invest') {
-              monthlyExpense += Number(ar.amount || 0)
+              monthlyExpense += amtTwd
             }
           }
         })
       }
     })
-    const finalIncome = monthlyIncome
-    const finalExpense = monthlyExpense
     
     return {
-      title: '2026年1月至6月',
-      desc1: `收入總計 ${formatInvestNumber(finalIncome)} 元，`,
-      desc2: finalExpense === 0 ? '支出沒有改變' : `支出總計 ${formatInvestNumber(finalExpense)} 元`
+      title: dynamicTitle,
+      desc1: `預估月收入共 ${formatInvestNumber(Math.round(monthlyIncome))} 元，`,
+      desc2: monthlyExpense === 0 ? '預估月支出沒有改變' : `預估月支出共 ${formatInvestNumber(Math.round(monthlyExpense))} 元`
     }
   }
 })
@@ -448,6 +509,72 @@ const editInvestmentBySymbol = (symbol) => {
   }
 }
 
+const editSnapshotAmount = async (rec) => {
+  const newAmtStr = prompt(`請輸入 ${rec.date} 的新淨值金額：`, rec.amount)
+  if (newAmtStr === null) return
+  const newAmt = Number(newAmtStr)
+  if (isNaN(newAmt)) {
+    alert('請輸入有效的數字')
+    return
+  }
+  
+  // 1. 更新本機 state
+  const found = historyRecords.value.find(h => h.date === rec.date)
+  if (found) {
+    found.amount = newAmt
+  }
+  
+  // 2. 更新 localStorage
+  const localHistory = JSON.parse(localStorage.getItem('net_worth_history') || '[]')
+  const localFound = localHistory.find(h => h.date === rec.date)
+  if (localFound) {
+    localFound.amount = newAmt
+    localStorage.setItem('net_worth_history', JSON.stringify(localHistory))
+  }
+  
+  // 3. 更新 Supabase
+  try {
+    const { error } = await supabase
+      .from('net_worth_history')
+      .update({ amount: newAmt })
+      .eq('date', rec.date)
+    if (error) {
+      console.warn('Update historical snapshot in DB failed:', error)
+    } else {
+      showToast(`${rec.date} 快照金額已修改為 ${formatInvestNumber(newAmt)} 元`)
+    }
+  } catch (err) {
+    console.warn(err)
+  }
+}
+
+const deleteSnapshot = (date) => {
+  triggerDeleteConfirm(`確定要刪除 ${date} 的歷史快照嗎？此操作將使圖表在該天產生平滑過渡。`, async () => {
+    // 1. 更新本機 state
+    historyRecords.value = historyRecords.value.filter(h => h.date !== date)
+    
+    // 2. 更新 localStorage
+    const localHistory = JSON.parse(localStorage.getItem('net_worth_history') || '[]')
+    const updatedLocal = localHistory.filter(h => h.date !== date)
+    localStorage.setItem('net_worth_history', JSON.stringify(updatedLocal))
+    
+    // 3. 更新 Supabase
+    try {
+      const { error } = await supabase
+        .from('net_worth_history')
+        .delete()
+        .eq('date', date)
+      if (error) {
+        console.warn('Delete historical snapshot from DB failed:', error)
+      } else {
+        showToast(`${date} 歷史快照已成功刪除`)
+      }
+    } catch (err) {
+      console.warn(err)
+    }
+  })
+}
+
 const handleTagInput = (e) => {
   let val = e.target.value
   if (!activeAutoRecord.value) return
@@ -605,19 +732,27 @@ const nextRecordDateStr = computed(() => {
 })
 
 const autoRecordsSummary = computed(() => {
-  let income = 0
-  let expense = 0
+  let incomeTwd = 0
+  let expenseTwd = 0
   newAssetAutoRecords.value.forEach(ar => {
     const amt = Number(ar.amount || 0)
+    const currency = ar.currency || 'TWD'
+    let amtTwd = amt
+    if (currency === 'USD') {
+      amtTwd = amt * usdTwdRate.value
+    } else if (currency === 'JPY') {
+      amtTwd = amt * (jpyTwdRate.value || 0.22)
+    }
+    
     if (ar.type === 'income') {
-      income += amt
+      incomeTwd += amtTwd
     } else {
-      expense += amt
+      expenseTwd += amtTwd
     }
   })
   return {
-    income: income.toLocaleString('zh-TW', { style: 'currency', currency: 'TWD', minimumFractionDigits: 0 }),
-    expense: expense.toLocaleString('zh-TW', { style: 'currency', currency: 'TWD', minimumFractionDigits: 0 })
+    income: 'TWD ' + Math.round(incomeTwd).toLocaleString('en-US'),
+    expense: 'TWD ' + Math.round(expenseTwd).toLocaleString('en-US')
   }
 })
 
@@ -1444,11 +1579,14 @@ const trendDatasets = computed(() => {
       if (!excludedAccs.includes(id)) {
         const acc = accounts.value.find(a => a.id === id)
         const isLiab = acc ? liabTypes.includes(acc.type) : false
+        const currency = acc ? (acc.currency || 'TWD') : 'TWD'
+        const rate = currency === 'USD' ? usdTwdRate.value : (currency === 'JPY' ? jpyTwdRate.value : 1)
+        const balTwd = Number(bal || 0) * rate
         
         if (isLiab) {
-          totalAcc -= Math.abs(Number(bal || 0))
+          totalAcc -= Math.abs(balTwd)
         } else {
-          totalAcc += Number(bal || 0)
+          totalAcc += balTwd
         }
       }
     })
@@ -1489,8 +1627,62 @@ const trendDatasets = computed(() => {
       }
     }
     
-    // 方案 A：將固定資產與負債視為歷史常數，將淨資產歷史波動100%反映於可支配流動部位
-    // 估算歷史上的可支配部位 (流動資金 + 投資部位)
+    if (r.details && r.details.accounts) {
+      const liquidTypes = ['Bank', 'Cash', 'E-Wallet', 'OtherLiquid']
+      const liabTypes = ['Credit Card', 'Liability', 'Loan', 'Payable', 'OtherLiab']
+      const fixedTypes = ['RealEstate', 'Car', 'OtherFixed', 'Other']
+      
+      let totalLiquidAcc = 0
+      let totalLiabilitiesAcc = 0
+      let totalFixedAcc = 0
+      let totalReceivablesAcc = 0
+      
+      Object.entries(r.details.accounts).forEach(([id, bal]) => {
+        if (!excludedAccs.includes(id)) {
+          const acc = accounts.value.find(a => a.id === id)
+          const type = acc ? acc.type : 'Other'
+          const currency = acc ? (acc.currency || 'TWD') : 'TWD'
+          const rate = currency === 'USD' ? usdTwdRate.value : (currency === 'JPY' ? jpyTwdRate.value : 1)
+          const balTwd = Number(bal || 0) * rate
+          
+          if (liabTypes.includes(type)) {
+            totalLiabilitiesAcc += Math.abs(balTwd)
+          } else if (liquidTypes.includes(type)) {
+            totalLiquidAcc += balTwd
+          } else if (fixedTypes.includes(type)) {
+            totalFixedAcc += balTwd
+          } else if (type === 'Receivable') {
+            totalReceivablesAcc += balTwd
+          } else {
+            totalLiquidAcc += balTwd
+          }
+        }
+      })
+      
+      let totalInv = 0
+      if (Array.isArray(r.details.investments)) {
+        r.details.investments.forEach(inv => {
+          if (!excludedInvs.includes(inv.id)) {
+            const val = Number(inv.quantity || 0) * Number(inv.current_price || 0)
+            const valTwd = inv.currency === 'USD' ? val * usdTwdRate.value : val
+            totalInv += valTwd
+          }
+        })
+      } else if (r.details.investments_value !== undefined) {
+        totalInv = Number(r.details.investments_value || 0)
+      }
+      
+      return {
+        date: r.date,
+        netWorth: Math.round(totalLiquidAcc + totalInv + totalFixedAcc + totalReceivablesAcc - totalLiabilitiesAcc),
+        liabilities: Math.round(totalLiabilitiesAcc),
+        liquid: Math.round(totalLiquidAcc),
+        invest: Math.round(totalInv),
+        details: r.details
+      }
+    }
+    
+    // 方案 A：對於無明細的舊版快照，才回退使用歷史比例估算
     const rAmount = getHistoricalAmount(r)
     const estLiquidInvest = Math.max(0, rAmount + todayLiabilities - todayFixed - todayReceivables)
     const estLiquid = estLiquidInvest * liquidRatio
@@ -1499,12 +1691,126 @@ const trendDatasets = computed(() => {
     return {
       date: r.date,
       netWorth: rAmount,
-      liabilities: todayLiabilities, // 負債視為常數
+      liabilities: todayLiabilities,
       liquid: estLiquid,
       invest: estInvest,
       details: r.details
     }
   })
+})
+
+const selectedHistoryIndex = ref(null)
+
+watch(trendDatasets, (newVal) => {
+  if (newVal.length > 0) {
+    if (selectedHistoryIndex.value === null || selectedHistoryIndex.value >= newVal.length) {
+      selectedHistoryIndex.value = newVal.length - 1
+    }
+  } else {
+    selectedHistoryIndex.value = null
+  }
+}, { immediate: true })
+
+const selectedHistoryDetails = computed(() => {
+  const datasets = trendDatasets.value
+  const idx = selectedHistoryIndex.value
+  if (idx === null || !datasets[idx]) return null
+  
+  const current = datasets[idx]
+  const prev = idx > 0 ? datasets[idx - 1] : null
+  const hasRealPrevDetails = !!(prev && prev.details && prev.details.accounts)
+  
+  const nwDiff = prev ? current.netWorth - prev.netWorth : 0
+  
+  const changes = []
+  
+  const currentAccs = current.details?.accounts || {}
+  const prevAccs = prev?.details?.accounts || {}
+  
+  const excludedAccs = JSON.parse(localStorage.getItem('excluded_accounts_ids') || '[]')
+  
+  const allAccIds = new Set([...Object.keys(currentAccs), ...Object.keys(prevAccs)])
+  
+  allAccIds.forEach(id => {
+    if (!excludedAccs.includes(id)) {
+      const curBal = Number(currentAccs[id] || 0)
+      const prevBal = hasRealPrevDetails ? Number(prevAccs[id] || 0) : curBal
+      const diff = Math.round(curBal - prevBal)
+      
+      if (Math.abs(diff) > 0) {
+        const acc = accounts.value.find(a => a.id === id)
+        if (acc) {
+          const currency = acc.currency || 'TWD'
+          const rate = currency === 'USD' ? usdTwdRate.value : (currency === 'JPY' ? jpyTwdRate.value : 1)
+          const diffTwd = Math.round(diff * rate)
+          
+          changes.push({
+            name: acc.name,
+            diff,
+            diffTwd,
+            currency,
+            type: acc.type
+          })
+        }
+      }
+    }
+  })
+  
+  const invDiff = prev ? current.invest - prev.invest : 0
+  if (Math.round(invDiff) !== 0) {
+    changes.push({
+      name: '📈 投資市值波動',
+      diff: Math.round(invDiff),
+      diffTwd: Math.round(invDiff),
+      currency: 'TWD',
+      type: 'Invest'
+    })
+  }
+  
+  const liabDiff = prev ? current.liabilities - prev.liabilities : 0
+  if (Math.round(liabDiff) !== 0) {
+    changes.push({
+      name: '🏦 負債總額變動',
+      diff: -Math.round(liabDiff), // Negative means liability increased, causing net worth drop
+      diffTwd: -Math.round(liabDiff),
+      currency: 'TWD',
+      type: 'Liability'
+    })
+  }
+
+  const txs = []
+  if (current.details?.transactions) {
+    current.details.transactions.forEach(tx => {
+      txs.push(tx)
+    })
+  }
+  
+  const liquidChanges = []
+  const investChanges = []
+  const liabChanges = []
+  
+  const liabTypes = ['Credit Card', 'Liability', 'Loan', 'Payable', 'OtherLiab']
+  
+  changes.forEach(chg => {
+    if (chg.type === 'Invest') {
+      investChanges.push(chg)
+    } else if (chg.type === 'Liability' || liabTypes.includes(chg.type)) {
+      liabChanges.push(chg)
+    } else {
+      liquidChanges.push(chg)
+    }
+  })
+  
+  return {
+    date: current.date,
+    netWorth: current.netWorth,
+    diff: nwDiff,
+    hasChanges: changes.length > 0,
+    liquidChanges,
+    investChanges,
+    liabChanges,
+    transactions: txs
+  }
 })
 
 const trendDateRangeText = computed(() => {
@@ -1517,48 +1823,66 @@ const trendDateRangeText = computed(() => {
 
 const netWorthSummaryText = computed(() => {
   const datasets = trendDatasets.value
-  if (datasets.length < 2) return { nw: '我的淨資產沒有改變', liab: '我的負債沒有改變' }
+  if (datasets.length < 2) return null
   
   const first = datasets[0]
   const last = datasets[datasets.length - 1]
+  
+  const formatDateStr = (dateStr) => {
+    const d = new Date(dateStr)
+    return `${d.getMonth() + 1}/${d.getDate()}`
+  }
   
   const nwDiff = last.netWorth - first.netWorth
-  const nwPct = first.netWorth !== 0 ? Math.round((nwDiff / Math.abs(first.netWorth)) * 100) : (nwDiff !== 0 ? 100 : 0)
-  const nwDirection = nwDiff >= 0 ? '增加' : '減少'
-  const nwAmtText = isHidden.value ? '•••••• 元' : `${formatInvestNumber(Math.abs(nwDiff))} 元`
-  const nwText = `我的淨資產${nwDirection}了 ${nwAmtText}，較期初 ${nwPct >= 0 ? '+' : ''}${nwPct}%`
+  const nwPct = first.netWorth !== 0 ? ((nwDiff / Math.abs(first.netWorth)) * 100).toFixed(2) : (nwDiff !== 0 ? '100.00' : '0.00')
   
+  const liqDiff = last.liquid - first.liquid
+  const invDiff = last.invest - first.invest
   const liabDiff = last.liabilities - first.liabilities
-  const liabPct = first.liabilities !== 0 ? Math.round((liabDiff / Math.abs(first.liabilities)) * 100) : (liabDiff !== 0 ? 100 : 0)
-  const liabDirection = liabDiff >= 0 ? '增加' : '減少'
-  const liabAmtText = isHidden.value ? '•••••• 元' : `${formatInvestNumber(Math.abs(liabDiff))} 元`
-  const liabText = liabDiff === 0 ? '我的負債沒有改變' : `我的負債${liabDirection}了 ${liabAmtText}，較期初 ${liabPct >= 0 ? '+' : ''}${liabPct}%`
   
-  return { nw: nwText, liab: liabText }
+  return {
+    startVal: first.netWorth,
+    lastVal: last.netWorth,
+    diff: nwDiff,
+    pct: `${nwDiff >= 0 ? '+' : ''}${nwPct}%`,
+    startDateStr: formatDateStr(first.date),
+    liqDiff: Math.round(liqDiff),
+    invDiff: Math.round(invDiff),
+    liabDiff: Math.round(liabDiff)
+  }
 })
-
 const liquidInvestSummaryText = computed(() => {
   const datasets = trendDatasets.value
-  if (datasets.length < 2) return { liquid: '我的流動資金沒有改變', invest: '我的投資沒有改變' }
+  if (datasets.length < 2) return null
   
   const first = datasets[0]
   const last = datasets[datasets.length - 1]
   
+  const formatDateStr = (dateStr) => {
+    const d = new Date(dateStr)
+    return `${d.getMonth() + 1}/${d.getDate()}`
+  }
+  
   const liqDiff = last.liquid - first.liquid
-  const liqPct = first.liquid !== 0 ? Math.round((liqDiff / Math.abs(first.liquid)) * 100) : (liqDiff !== 0 ? 100 : 0)
-  const liqDirection = liqDiff >= 0 ? '增加' : '減少'
-  const liqAmtText = isHidden.value ? '•••••• 元' : `${formatInvestNumber(Math.abs(liqDiff))} 元`
-  const liqText = liqDiff === 0 ? '我的流動資金沒有改變' : `我的流動資金${liqDirection}了 ${liqAmtText}，較期初 ${liqPct >= 0 ? '+' : ''}${liqPct}%`
+  const liqPct = first.liquid !== 0 ? ((liqDiff / Math.abs(first.liquid)) * 100).toFixed(2) : (liqDiff !== 0 ? '100.00' : '0.00')
   
   const invDiff = last.invest - first.invest
-  const invPct = first.invest !== 0 ? Math.round((invDiff / Math.abs(first.invest)) * 100) : (invDiff !== 0 ? 100 : 0)
-  const invDirection = invDiff >= 0 ? '增加' : '減少'
-  const invAmtText = isHidden.value ? '•••••• 元' : `${formatInvestNumber(Math.abs(invDiff))} 元`
-  const invText = invDiff === 0 ? '我的投資沒有改變' : `我的投資${invDirection}了 ${invAmtText}，較期初 ${invPct >= 0 ? '+' : ''}${invPct}%`
+  const invPct = first.invest !== 0 ? ((invDiff / Math.abs(first.invest)) * 100).toFixed(2) : (invDiff !== 0 ? '100.00' : '0.00')
   
-  return { liquid: liqText, invest: invText }
+  return {
+    startLiq: first.liquid,
+    lastLiq: last.liquid,
+    liqDiff: Math.round(liqDiff),
+    liqPct: `${liqDiff >= 0 ? '+' : ''}${liqPct}%`,
+    
+    startInv: first.invest,
+    lastInv: last.invest,
+    invDiff: Math.round(invDiff),
+    invPct: `${invDiff >= 0 ? '+' : ''}${invPct}%`,
+    
+    startDateStr: formatDateStr(first.date)
+  }
 })
-
 const moneyFlowAnalysis = computed(() => {
   const datasets = trendDatasets.value
   if (datasets.length < 2) return null
@@ -1587,7 +1911,8 @@ const moneyFlowAnalysis = computed(() => {
   }
 
   const accChanges = []
-  if (finalFirstAccounts && lastDetails.accounts) {
+  const hasRealFirstDetails = !!(firstDetails && firstDetails.accounts)
+  if (hasRealFirstDetails && lastDetails.accounts) {
     Object.entries(lastDetails.accounts).forEach(([id, lastBal]) => {
       const firstBal = finalFirstAccounts[id]
       if (firstBal !== undefined) {
@@ -2301,6 +2626,12 @@ const trendChartOptions = computed(() => {
   return {
     responsive: true,
     maintainAspectRatio: false,
+    onClick: (event, elements) => {
+      if (elements && elements.length > 0) {
+        const index = elements[0].index
+        selectedHistoryIndex.value = index
+      }
+    },
     interaction: { mode: 'index', intersect: false },
     plugins: {
       legend: { 
@@ -3647,18 +3978,27 @@ const processAutoRecords = async () => {
         if (currentDay >= effectiveDay && !isCurrentMonthProcessed) {
           const amount = Number(ar.amount || 0)
           const type = ar.type
+          const arCurrency = ar.currency || 'TWD'
+          
+          let amountTwd = amount
+          if (arCurrency === 'USD') {
+            amountTwd = amount * usdTwdRate.value
+          } else if (arCurrency === 'JPY') {
+            amountTwd = amount * (jpyTwdRate.value || 0.22)
+          }
+          amountTwd = Math.round(amountTwd)
           
           if (type === 'income') {
-            adjustAccountBalanceByTwd(acc, amount)
-            showToast(`自動記帳：${acc.name} 固定收入 TWD ${amount}`)
+            adjustAccountBalanceByTwd(acc, amountTwd)
+            showToast(`自動記帳：${acc.name} 固定收入 ${arCurrency} ${amount}`)
           } else if (type === 'expense') {
-            adjustAccountBalanceByTwd(acc, -amount)
+            adjustAccountBalanceByTwd(acc, -amountTwd)
             if (acc.balance < 0) acc.balance = 0
-            showToast(`自動記帳：${acc.name} 固定支出 TWD ${amount}`)
+            showToast(`自動記帳：${acc.name} 固定支出 ${arCurrency} ${amount}`)
           } else if (type === 'transfer') {
             const targetAcc = updatedAccounts.find(a => a.id === ar.target_account_id)
             if (targetAcc) {
-              adjustAccountBalanceByTwd(acc, -amount)
+              adjustAccountBalanceByTwd(acc, -amountTwd)
               if (acc.balance < 0) acc.balance = 0
               
               // 如果轉入的目標帳戶是負債類（如：房貸、信貸、信用卡），轉帳代表還款，應減少負債餘額
@@ -3669,20 +4009,20 @@ const processAutoRecords = async () => {
                   const targetBalanceTwd = getAccountBalanceTwd(targetAcc)
                   const rate = Number(ar.interest_rate)
                   const monthlyInterestTwd = Math.round(targetBalanceTwd * (rate / 100) / 12)
-                  const principalPaidTwd = Math.max(0, amount - monthlyInterestTwd)
+                  const principalPaidTwd = Math.max(0, amountTwd - monthlyInterestTwd)
                   
                   adjustAccountBalanceByTwd(targetAcc, -principalPaidTwd)
                   if (targetAcc.balance < 0) targetAcc.balance = 0
                   
                   showToast(`自動還款：${acc.name} ➡️ ${targetAcc.name} (本金 -${principalPaidTwd}, 利息 -${monthlyInterestTwd})`)
                 } else {
-                  adjustAccountBalanceByTwd(targetAcc, -amount)
+                  adjustAccountBalanceByTwd(targetAcc, -amountTwd)
                   if (targetAcc.balance < 0) targetAcc.balance = 0
-                  showToast(`自動轉帳：從 ${acc.name} 轉帳至 ${targetAcc.name} TWD ${amount}`)
+                  showToast(`自動轉帳：從 ${acc.name} 轉帳至 ${targetAcc.name} ${arCurrency} ${amount}`)
                 }
               } else {
-                adjustAccountBalanceByTwd(targetAcc, amount)
-                showToast(`自動轉帳：從 ${acc.name} 轉帳至 ${targetAcc.name} TWD ${amount}`)
+                adjustAccountBalanceByTwd(targetAcc, amountTwd)
+                showToast(`自動轉帳：從 ${acc.name} 轉帳至 ${targetAcc.name} ${arCurrency} ${amount}`)
               }
               
               targetAcc._dirty = true
@@ -4628,22 +4968,119 @@ onUnmounted(() => {
               <span>{{ trendPeriodROI >= 0 ? '+' : '' }}{{ trendPeriodROI.toFixed(2) }}%</span>
             </div>
           </div>
-          <template v-if="trendType === 'net_worth'">
-            <div style="font-size: 0.95rem; font-weight: 700; color: var(--color-text); line-height: 1.6;">
-              {{ netWorthSummaryText.nw }}
-            </div>
-            <div style="font-size: 0.95rem; font-weight: 700; color: var(--color-text); line-height: 1.6; margin-top: 4px;">
-              {{ netWorthSummaryText.liab }}
+          <template v-if="trendType === 'net_worth' && netWorthSummaryText">
+            <div style="display: flex; flex-direction: column; gap: 12px; text-align: left; width: 100%;">
+              <!-- Net Worth Header Card -->
+              <div style="background: rgba(92, 103, 245, 0.03); border: 1px solid rgba(92, 103, 245, 0.1); border-radius: 12px; padding: 12px 16px;">
+                <div style="font-size: 0.72rem; font-weight: 700; color: var(--color-text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">總淨資產變動</div>
+                <div style="display: flex; align-items: baseline; gap: 8px;">
+                  <span style="font-size: 1.15rem; font-weight: 900; color: var(--color-text); font-family: 'Outfit', sans-serif;">
+                    {{ isHidden ? '••••••' : formatInvestNumber(netWorthSummaryText.lastVal - netWorthSummaryText.startVal) }} 元
+                  </span>
+                  <span :style="{ 
+                    color: netWorthSummaryText.diff >= 0 ? 'var(--color-success)' : 'var(--color-danger)', 
+                    fontSize: '0.8rem', 
+                    fontWeight: '800' 
+                  }">
+                    ({{ netWorthSummaryText.diff >= 0 ? '＋' : '－' }}{{ netWorthSummaryText.pct }})
+                  </span>
+                </div>
+                <div style="font-size: 0.72rem; color: var(--color-text-muted); margin-top: 6px; font-weight: 500;">
+                  期初 {{ netWorthSummaryText.startDateStr }}：{{ formatInvestNumber(netWorthSummaryText.startVal) }} 元 ➔ 目前：{{ formatInvestNumber(netWorthSummaryText.lastVal) }} 元
+                </div>
+              </div>
+              
+              <!-- 變動來源 Breakdown (Unified Horizontal Segments) -->
+              <div style="margin-top: 4px; display: flex; flex-direction: column; gap: 6px; width: 100%;">
+                <div style="font-weight: 800; color: var(--color-text-muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.5px; border-left: 2.5px solid var(--color-primary); padding-left: 8px; margin-bottom: 4px;">變動來源分析</div>
+                
+                <div style="
+                  display: flex; 
+                  background: rgba(92, 103, 245, 0.02); 
+                  border: 1px solid rgba(92, 103, 245, 0.08); 
+                  border-radius: 12px; 
+                  padding: 10px 0;
+                  width: 100%;
+                ">
+                  <!-- Segment 1: 流動資金 -->
+                  <div style="flex: 1; padding: 4px 16px; text-align: left; border-right: 1px solid rgba(92, 103, 245, 0.12);">
+                    <div style="font-size: 0.68rem; color: var(--color-text-muted); font-weight: 700; margin-bottom: 4px;">流動資金變動</div>
+                    <div :style="{ color: netWorthSummaryText.liqDiff >= 0 ? 'var(--color-success)' : 'var(--color-danger)', fontSize: '0.82rem', fontWeight: '800', fontFamily: 'Outfit' }">
+                      {{ netWorthSummaryText.liqDiff >= 0 ? '＋' : '' }}{{ formatInvestNumber(netWorthSummaryText.liqDiff) }} 元
+                    </div>
+                  </div>
+                  
+                  <!-- Segment 2: 投資市值 -->
+                  <div style="flex: 1; padding: 4px 16px; text-align: left; border-right: netWorthSummaryText.liabDiff !== 0 ? '1px solid rgba(92, 103, 245, 0.12)' : 'none';">
+                    <div style="font-size: 0.68rem; color: var(--color-text-muted); font-weight: 700; margin-bottom: 4px;">投資市值變動</div>
+                    <div :style="{ color: netWorthSummaryText.invDiff >= 0 ? 'var(--color-success)' : 'var(--color-danger)', fontSize: '0.82rem', fontWeight: '800', fontFamily: 'Outfit' }">
+                      {{ netWorthSummaryText.invDiff >= 0 ? '＋' : '' }}{{ formatInvestNumber(netWorthSummaryText.invDiff) }} 元
+                    </div>
+                  </div>
+                  
+                  <!-- Segment 3: 負債與其他 (Conditional) -->
+                  <div v-if="netWorthSummaryText.liabDiff !== 0" style="flex: 1; padding: 4px 16px; text-align: left;">
+                    <div style="font-size: 0.68rem; color: var(--color-text-muted); font-weight: 700; margin-bottom: 4px;">負債與固定資產</div>
+                    <div :style="{ color: netWorthSummaryText.liabDiff <= 0 ? 'var(--color-success)' : 'var(--color-danger)', fontSize: '0.82rem', fontWeight: '800', fontFamily: 'Outfit' }">
+                      {{ netWorthSummaryText.liabDiff > 0 ? '＋' : '' }}{{ formatInvestNumber(netWorthSummaryText.liabDiff) }} 元
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
           </template>
-          <template v-else-if="trendType === 'liquid_invest'">
-            <div style="font-size: 0.95rem; font-weight: 700; color: var(--color-text); line-height: 1.6;">
-              {{ liquidInvestSummaryText.liquid }}
-            </div>
-            <div style="font-size: 0.95rem; font-weight: 700; color: var(--color-text); line-height: 1.6; margin-top: 4px;">
-              {{ liquidInvestSummaryText.invest }}
+          <template v-else-if="trendType === 'liquid_invest' && liquidInvestSummaryText">
+            <div style="display: flex; flex-direction: column; gap: 12px; text-align: left; width: 100%;">
+              
+              <!-- Unified Horizontal Segments Panel -->
+              <div style="
+                display: flex; 
+                background: rgba(92, 103, 245, 0.02); 
+                border: 1px solid rgba(92, 103, 245, 0.08); 
+                border-radius: 16px; 
+                padding: 16px 0;
+                width: 100%;
+              ">
+                
+                <!-- Segment 1: 流動資金 -->
+                <div style="flex: 1; padding: 0 20px; text-align: left; border-right: 1px solid rgba(92, 103, 245, 0.12); display: flex; flex-direction: column; justify-content: space-between;">
+                  <div>
+                    <div style="font-size: 0.7rem; font-weight: 800; color: var(--color-text-muted); border-left: 2.5px solid var(--color-primary); padding-left: 6px; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.3px;">流動資金</div>
+                    <div :style="{ color: liquidInvestSummaryText.liqDiff >= 0 ? 'var(--color-success)' : 'var(--color-danger)', fontSize: '1.05rem', fontWeight: '900', fontFamily: 'Outfit, sans-serif' }">
+                      {{ liquidInvestSummaryText.liqDiff >= 0 ? '＋' : '' }}{{ formatInvestNumber(liquidInvestSummaryText.liqDiff) }} 元
+                    </div>
+                    <div style="font-size: 0.68rem; color: var(--color-text-muted); font-weight: 600; margin-top: 2px;">
+                      成長率：{{ liquidInvestSummaryText.liqPct }}
+                    </div>
+                  </div>
+                  <div style="margin-top: 10px; font-size: 0.65rem; color: var(--color-text-muted); border-top: 1px dashed rgba(0,0,0,0.06); padding-top: 6px; display: flex; flex-direction: column; gap: 1px;">
+                    <div>期初：{{ formatInvestNumber(Math.round(liquidInvestSummaryText.startLiq)) }} 元</div>
+                    <div>目前：{{ formatInvestNumber(Math.round(liquidInvestSummaryText.lastLiq)) }} 元</div>
+                  </div>
+                </div>
+
+                <!-- Segment 2: 投資市值 -->
+                <div style="flex: 1; padding: 0 20px; text-align: left; display: flex; flex-direction: column; justify-content: space-between;">
+                  <div>
+                    <div style="font-size: 0.7rem; font-weight: 800; color: var(--color-text-muted); border-left: 2.5px solid #a855f7; padding-left: 6px; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.3px;">投資市值</div>
+                    <div :style="{ color: liquidInvestSummaryText.invDiff >= 0 ? 'var(--color-success)' : 'var(--color-danger)', fontSize: '1.05rem', fontWeight: '900', fontFamily: 'Outfit, sans-serif' }">
+                      {{ liquidInvestSummaryText.invDiff >= 0 ? '＋' : '' }}{{ formatInvestNumber(liquidInvestSummaryText.invDiff) }} 元
+                    </div>
+                    <div style="font-size: 0.7rem; color: var(--color-text-muted); font-weight: 600; margin-top: 2px;">
+                      成長率：{{ liquidInvestSummaryText.invPct }}
+                    </div>
+                  </div>
+                  <div style="margin-top: 10px; font-size: 0.65rem; color: var(--color-text-muted); border-top: 1px dashed rgba(0,0,0,0.06); padding-top: 6px; display: flex; flex-direction: column; gap: 1px;">
+                    <div>期初：{{ formatInvestNumber(Math.round(liquidInvestSummaryText.startInv)) }} 元</div>
+                    <div>目前：{{ formatInvestNumber(Math.round(liquidInvestSummaryText.lastInv)) }} 元</div>
+                  </div>
+                </div>
+
+              </div>
+              
             </div>
           </template>
+
           <template v-else>
             <!-- Premium horizontal scrollable chip row -->
             <div style="display: flex; gap: 8px; overflow-x: auto; padding: 2px 0 4px; -webkit-overflow-scrolling: touch; scrollbar-width: none; -ms-overflow-style: none;">
@@ -4743,7 +5180,6 @@ onUnmounted(() => {
               我的淨資產
             </div>
             <div style="display: flex; align-items: center; gap: 6px; font-size: 0.82rem; font-weight: bold; color: var(--color-text);">
-              <!-- Dotted box indicator matching native design -->
               <span style="display: inline-flex; width: 12px; height: 12px; border: 1.5px dashed #a0a0a5; box-sizing: border-box; border-radius: 2px;"></span>
               負債
             </div>
@@ -4793,6 +5229,227 @@ onUnmounted(() => {
             <button @click="fetchAllRoiHistory()" style="font-size: 0.78rem; padding: 6px 16px; background: rgba(120,57,236,0.2); border: 1px solid rgba(120,57,236,0.4); color: #a87af5; border-radius: 8px; cursor: pointer; margin-top: 4px;">立即載入</button>
           </div>
         </template>
+
+        <!-- Interactive Node Details (Premium Redesign) -->
+        <div v-if="selectedHistoryDetails && trendType !== 'roi'" 
+             style="
+               background: linear-gradient(135deg, rgba(92, 103, 245, 0.04) 0%, rgba(92, 103, 245, 0.01) 100%), var(--color-card-bg);
+               border: 1px solid rgba(92, 103, 245, 0.15);
+               border-radius: 20px;
+               padding: 20px;
+               margin-bottom: 24px;
+               text-align: left;
+               box-shadow: 0 12px 30px rgba(0, 0, 0, 0.03), inset 0 1px 0 rgba(255, 255, 255, 0.6);
+               backdrop-filter: blur(10px);
+               transition: all 0.3s ease;
+             "
+        >
+          <!-- Header Row -->
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; border-bottom: 1px solid rgba(92, 103, 245, 0.08); padding-bottom: 12px;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span style="font-size: 1.1rem; display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 8px; background: rgba(92, 103, 245, 0.08); color: var(--color-primary);">🔍</span>
+              <span style="font-size: 0.9rem; font-weight: 800; color: var(--color-text); letter-spacing: 0.3px;">{{ selectedHistoryDetails.date }} 淨值變動明細</span>
+            </div>
+            <span style="font-size: 0.72rem; color: var(--color-text-muted); font-weight: 500; opacity: 0.8;">（點擊圖表節點切換）</span>
+          </div>
+          
+          <!-- Net Worth Info Row -->
+          <div style="display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 20px; background: rgba(92, 103, 245, 0.03); padding: 12px 16px; border-radius: 12px; border: 1px solid rgba(92, 103, 245, 0.06);">
+            <div>
+              <div style="font-size: 0.75rem; color: var(--color-text-muted); font-weight: 700; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px;">當日淨資產</div>
+              <div style="font-size: 1.25rem; font-weight: 900; color: var(--color-text); font-family: 'Outfit', sans-serif;">
+                {{ isHidden ? '••••••' : formatInvestNumber(selectedHistoryDetails.netWorth) }} <span style="font-size: 0.85rem; font-weight: 700; color: var(--color-text-muted);">元</span>
+              </div>
+            </div>
+            <div v-if="selectedHistoryDetails.diff !== 0" style="display: flex; align-items: center; gap: 8px; align-self: flex-end; margin-bottom: 2px;">
+              <span style="font-size: 0.72rem; color: var(--color-text-muted); font-weight: 600;">較前一天</span>
+              <span :style="{ 
+                color: selectedHistoryDetails.diff >= 0 ? 'var(--color-success)' : 'var(--color-danger)', 
+                fontSize: '0.85rem', 
+                fontWeight: '800',
+                background: selectedHistoryDetails.diff >= 0 ? 'rgba(46, 193, 115, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+                padding: '4px 10px',
+                borderRadius: '8px',
+                display: 'inline-block'
+              }">
+                {{ selectedHistoryDetails.diff >= 0 ? '＋' : '－' }}{{ formatInvestNumber(Math.abs(selectedHistoryDetails.diff)) }} 元
+              </span>
+            </div>
+            <div v-else style="font-size: 0.8rem; color: var(--color-text-muted); font-weight: 700; align-self: flex-end; margin-bottom: 6px;">
+              無變動
+            </div>
+          </div>
+
+          <!-- Changes List (Grouped by Asset Category) -->
+          <div v-if="selectedHistoryDetails.hasChanges" style="display: flex; flex-direction: column; gap: 14px; width: 100%;">
+            
+            <!-- Group 1: 流動資金帳戶 -->
+            <div v-if="selectedHistoryDetails.liquidChanges.length > 0" style="display: flex; flex-direction: column; gap: 4px;">
+              <div style="font-size: 0.72rem; font-weight: 800; color: var(--color-text-muted); border-left: 2.5px solid var(--color-primary); padding-left: 8px; margin-bottom: 6px; letter-spacing: 0.5px; text-transform: uppercase;">
+                流動資金帳戶
+              </div>
+              
+              <div v-for="chg in selectedHistoryDetails.liquidChanges" :key="chg.name" 
+                   style="
+                     display: flex; 
+                     justify-content: space-between; 
+                     align-items: center; 
+                     padding: 6px 6px; 
+                     border-radius: 8px;
+                     transition: all 0.2s ease;
+                   "
+                   onmouseover="this.style.background='rgba(92,103,245,0.03)'"
+                   onmouseout="this.style.background='transparent'"
+              >
+                <div style="display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0;">
+                  <span :style="{ 
+                    width: '6px', 
+                    height: '6px', 
+                    borderRadius: '50%', 
+                    flexShrink: 0,
+                    background: chg.diffTwd >= 0 ? 'var(--color-success)' : 'var(--color-danger)',
+                    boxShadow: chg.diffTwd >= 0 ? '0 0 6px rgba(46, 193, 115, 0.6)' : '0 0 6px rgba(239, 68, 68, 0.6)'
+                  }"></span>
+                  
+                  <div style="display: flex; flex-direction: column; align-items: flex-start; text-align: left; min-width: 0;">
+                    <span style="color: var(--color-text); font-size: 0.82rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 180px;">{{ chg.name }}</span>
+                    <span v-if="chg.currency !== 'TWD'" style="font-size: 0.68rem; color: var(--color-text-muted); margin-top: 2px; font-weight: 600; background: rgba(0, 0, 0, 0.04); padding: 1px 5px; border-radius: 4px;">
+                      原幣：{{ chg.diff >= 0 ? '＋' : '－' }}{{ chg.currency }} {{ formatInvestNumber(Math.abs(chg.diff)) }}
+                    </span>
+                  </div>
+                </div>
+                <span :style="{ 
+                  fontWeight: '800', 
+                  fontSize: '0.85rem',
+                  color: chg.diffTwd >= 0 ? 'var(--color-success)' : 'var(--color-danger)',
+                  fontFamily: 'Outfit, sans-serif'
+                }">
+                  {{ chg.diffTwd >= 0 ? '＋' : '－' }}{{ formatInvestNumber(Math.abs(chg.diffTwd)) }} 元
+                </span>
+              </div>
+            </div>
+
+            <!-- Group 2: 投資資產估值 -->
+            <div v-if="selectedHistoryDetails.investChanges.length > 0" style="display: flex; flex-direction: column; gap: 4px;">
+              <div style="font-size: 0.72rem; font-weight: 800; color: var(--color-text-muted); border-left: 2.5px solid #a855f7; padding-left: 8px; margin-bottom: 6px; letter-spacing: 0.5px; text-transform: uppercase;">
+                投資資產估值
+              </div>
+              
+              <div v-for="chg in selectedHistoryDetails.investChanges" :key="chg.name" 
+                   style="
+                     display: flex; 
+                     justify-content: space-between; 
+                     align-items: center; 
+                     padding: 6px 6px; 
+                     border-radius: 8px;
+                     transition: all 0.2s ease;
+                   "
+                   onmouseover="this.style.background='rgba(92,103,245,0.03)'"
+                   onmouseout="this.style.background='transparent'"
+              >
+                <div style="display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0;">
+                  <span :style="{ 
+                    width: '6px', 
+                    height: '6px', 
+                    borderRadius: '50%', 
+                    flexShrink: 0,
+                    background: chg.diffTwd >= 0 ? 'var(--color-success)' : 'var(--color-danger)',
+                    boxShadow: chg.diffTwd >= 0 ? '0 0 6px rgba(46, 193, 115, 0.6)' : '0 0 6px rgba(239, 68, 68, 0.6)'
+                  }"></span>
+                  <span style="color: var(--color-text); font-size: 0.82rem; font-weight: 700; text-align: left;">{{ chg.name }}</span>
+                </div>
+                <span :style="{ 
+                  fontWeight: '800', 
+                  fontSize: '0.85rem',
+                  color: chg.diffTwd >= 0 ? 'var(--color-success)' : 'var(--color-danger)',
+                  fontFamily: 'Outfit, sans-serif'
+                }">
+                  {{ chg.diffTwd >= 0 ? '＋' : '－' }}{{ formatInvestNumber(Math.abs(chg.diffTwd)) }} 元
+                </span>
+              </div>
+            </div>
+
+            <!-- Group 3: 負債項目變動 -->
+            <div v-if="selectedHistoryDetails.liabChanges.length > 0" style="display: flex; flex-direction: column; gap: 4px;">
+              <div style="font-size: 0.72rem; font-weight: 800; color: var(--color-text-muted); border-left: 2.5px solid #f97316; padding-left: 8px; margin-bottom: 6px; letter-spacing: 0.5px; text-transform: uppercase;">
+                負債項目變動
+              </div>
+              
+              <div v-for="chg in selectedHistoryDetails.liabChanges" :key="chg.name" 
+                   style="
+                     display: flex; 
+                     justify-content: space-between; 
+                     align-items: center; 
+                     padding: 6px 6px; 
+                     border-radius: 8px;
+                     transition: all 0.2s ease;
+                   "
+                   onmouseover="this.style.background='rgba(92,103,245,0.03)'"
+                   onmouseout="this.style.background='transparent'"
+              >
+                <div style="display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0;">
+                  <span :style="{ 
+                    width: '6px', 
+                    height: '6px', 
+                    borderRadius: '50%', 
+                    flexShrink: 0,
+                    background: chg.diffTwd >= 0 ? 'var(--color-success)' : 'var(--color-danger)',
+                    boxShadow: chg.diffTwd >= 0 ? '0 0 6px rgba(46, 193, 115, 0.6)' : '0 0 6px rgba(239, 68, 68, 0.6)'
+                  }"></span>
+                  <div style="display: flex; flex-direction: column; align-items: flex-start; text-align: left; min-width: 0;">
+                    <span style="color: var(--color-text); font-size: 0.82rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 180px;">{{ chg.name }}</span>
+                    <span v-if="chg.currency !== 'TWD'" style="font-size: 0.68rem; color: var(--color-text-muted); margin-top: 2px; font-weight: 600; background: rgba(0, 0, 0, 0.04); padding: 1px 5px; border-radius: 4px;">
+                      原幣：{{ chg.diff >= 0 ? '＋' : '－' }}{{ chg.currency }} {{ formatInvestNumber(Math.abs(chg.diff)) }}
+                    </span>
+                  </div>
+                </div>
+                <span :style="{ 
+                  fontWeight: '800', 
+                  fontSize: '0.85rem',
+                  color: chg.diffTwd >= 0 ? 'var(--color-success)' : 'var(--color-danger)',
+                  fontFamily: 'Outfit, sans-serif'
+                }">
+                  {{ chg.diffTwd >= 0 ? '＋' : '－' }}{{ formatInvestNumber(Math.abs(chg.diffTwd)) }} 元
+                </span>
+              </div>
+            </div>
+
+          </div>
+          <div v-else style="font-size: 0.8rem; color: var(--color-text-muted); text-align: center; padding: 20px 0; background: rgba(0,0,0,0.01); border-radius: 12px; border: 1px dashed rgba(0,0,0,0.04);">
+            當天各帳目金額無明顯變動。
+          </div>
+
+          <!-- Daily Transactions list -->
+          <div v-if="selectedHistoryDetails.transactions.length > 0" 
+               style="
+                 margin-top: 16px; 
+                 padding-top: 14px; 
+                 border-top: 1px dashed rgba(92, 103, 245, 0.15); 
+                 display: flex; 
+                 flex-direction: column; 
+                 gap: 8px;
+               "
+          >
+            <div style="font-size: 0.75rem; font-weight: 800; color: var(--color-text-muted); letter-spacing: 0.5px;">當日交易事件</div>
+            <div v-for="(tx, idx) in selectedHistoryDetails.transactions" :key="idx" 
+                 style="
+                   display: flex; 
+                   align-items: center; 
+                   gap: 8px; 
+                   font-size: 0.8rem; 
+                   color: var(--color-primary); 
+                   font-weight: 700;
+                   background: rgba(92, 103, 245, 0.04);
+                   padding: 6px 12px;
+                   border-radius: 8px;
+                   border: 1px solid rgba(92, 103, 245, 0.08);
+                 "
+            >
+              <span style="font-size: 0.9rem;">⚡</span>
+              <span>{{ tx.type === 'buy' ? '買入' : '賣出' }} {{ tx.symbol }} {{ tx.quantity }} 股 (價格: {{ tx.currency }} {{ tx.price || tx.buy_price }})</span>
+            </div>
+          </div>
+        </div>
 
         <!-- Smart Money Flow Analysis Card -->
         <div 
@@ -4859,7 +5516,7 @@ onUnmounted(() => {
           <button 
             v-for="time in [
               { label: '30天', value: '30D' },
-              { label: '6月', value: '6M' },
+              { label: '6個月', value: '6M' },
               { label: '1年', value: '1Y' },
               { label: '年初至今', value: 'YTD' },
               { label: '自訂', value: 'ALL' }
@@ -4949,6 +5606,31 @@ onUnmounted(() => {
           </div>
         </div>
         <div v-else class="settings-empty">目前尚無投資資料</div>
+      </div>
+
+      <!-- Historical Net Worth Snapshots Management -->
+      <div class="settings-section card" style="margin-top: 1rem;">
+        <h4 class="section-title">📅 歷史淨值快照管理</h4>
+        <div class="settings-table-list" v-if="historyRecords.length > 0">
+          <div v-for="rec in [...historyRecords].reverse().slice(0, 15)" :key="rec.date" class="settings-table-item" style="cursor: default;">
+            <div class="item-meta">
+              <span class="item-name" style="font-weight: bold;">{{ rec.date }}</span>
+              <span class="item-type-badge">快照金額：{{ isHidden ? '••••••' : formatCurrency(rec.amount) }} 元</span>
+            </div>
+            <div class="item-right-wrap" style="gap: 8px;">
+              <button class="icon-text-btn" style="padding: 4px 8px; border-radius: 8px; font-size: 0.72rem; border: 1px solid rgba(0,0,0,0.08); background: #f8fafc; cursor: pointer; box-shadow: none;" @click.stop="editSnapshotAmount(rec)" title="修改金額">
+                ✏️ 修改
+              </button>
+              <button class="delete-btn" @click.stop="deleteSnapshot(rec.date)" title="刪除快照">
+                <PhTrash size="16" />
+              </button>
+            </div>
+          </div>
+          <div v-if="historyRecords.length > 15" class="settings-empty" style="padding: 8px 0; font-size: 0.78rem; border-top: 1px solid rgba(0,0,0,0.03);">
+            僅顯示最近 15 筆快照紀錄
+          </div>
+        </div>
+        <div v-else class="settings-empty">目前尚無歷史快照紀錄</div>
       </div>
 
       <!-- Custom Account Groups Table List -->
@@ -5527,7 +6209,7 @@ onUnmounted(() => {
                       fontWeight: '800',
                       color: ar.type === 'income' ? 'var(--color-success)' : 'var(--color-text)'
                     }">
-                      {{ ar.type === 'income' ? '+' : '-' }}{{ Number(ar.amount).toLocaleString(ar.currency === 'USD' ? 'en-US' : 'zh-TW', { style: 'currency', currency: ar.currency || 'TWD', minimumFractionDigits: 0 }) }}
+                      {{ ar.type === 'income' ? '+' : '-' }}{{ ar.currency || 'TWD' }} {{ Number(ar.amount).toLocaleString('en-US', { minimumFractionDigits: 0 }) }}
                     </span>
                     <!-- Delete Button inside Card -->
                     <button type="button" @click.stop="deleteAutoRecord(idx)" style="background: rgba(224, 59, 84, 0.08); border: none; padding: 6px; border-radius: 8px; box-shadow: none; cursor: pointer; color: var(--color-danger); display: flex; align-items: center; justify-content: center; width: 26px; height: 26px; margin: 0; min-height: unset; height: auto;" onmouseover="this.style.background='rgba(224, 59, 84, 0.15)'" onmouseout="this.style.background='rgba(224, 59, 84, 0.08)'">
