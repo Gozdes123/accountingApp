@@ -4572,7 +4572,7 @@ onUnmounted(() => {
                   <div style="display: flex; flex-direction: column; align-items: flex-end;">
                     <span class="group-value-text" :class="{ 'text-dark': !listExpanded.invest, 'text-white': listExpanded.invest }">{{ isHidden ? '••••••' : formatCurrency(Math.round(totalInvestments)).replace('$', '') }}</span>
                     <!-- ROI badge for the entire portfolio -->
-                    <span v-if="!isHidden" style="font-size: 0.78rem; font-weight: 700; margin-top: 4px;" :style="listExpanded.invest ? {
+                    <span style="font-size: 0.78rem; font-weight: 700; margin-top: 4px;" :style="listExpanded.invest ? {
                       color: '#ffffff',
                       background: 'rgba(255, 255, 255, 0.2)',
                       padding: '2px 8px',
@@ -4581,7 +4581,7 @@ onUnmounted(() => {
                     } : {
                       color: totalInvestmentPnL >= 0 ? '#2ebd59' : '#ff453a'
                     }">
-                      {{ totalInvestmentPnL >= 0 ? '+' : '' }}{{ totalInvestmentPnL.toLocaleString('zh-TW', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) }} ({{ totalInvestmentPnLPct.toFixed(2) }}%)
+                      {{ totalInvestmentPnL >= 0 ? '+' : '' }}{{ isHidden ? '••••' : totalInvestmentPnL.toLocaleString('zh-TW', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) }} ({{ totalInvestmentPnLPct >= 0 ? '+' : '' }}{{ totalInvestmentPnLPct.toFixed(2) }}%)
                     </span>
                   </div>
                 </div>
@@ -4638,7 +4638,7 @@ onUnmounted(() => {
                             fontSize: '0.78rem',
                             fontWeight: '700'
                           }">
-                            {{ item.pnl >= 0 ? '+' : '' }}{{ isHidden ? '••••' : Math.round(item.pnl).toLocaleString('zh-TW') }} ({{ isHidden ? '••••%' : (item.pnl >= 0 ? '+' : '') + item.pnlPct.toFixed(2) + '%' }})
+                            {{ item.pnl >= 0 ? '+' : '' }}{{ isHidden ? '••••' : Math.round(item.pnl).toLocaleString('zh-TW') }} ({{ item.pnl >= 0 ? '+' : '' }}{{ item.pnlPct.toFixed(2) }}%)
                           </div>
                         </div>
                       </div>
@@ -7067,8 +7067,8 @@ onUnmounted(() => {
               </span>
             </div>
             <!-- Group ROI Display -->
-            <div v-if="activeCustomGroupCategory === 'invest' && !isHidden" style="font-size: 0.85rem; font-weight: 700; margin-top: 4px;" :style="{ color: activeCustomGroupPnL >= 0 ? '#2ebd59' : '#ff453a' }">
-              群組績效：{{ activeCustomGroupPnL >= 0 ? '+' : '' }}{{ activeCustomGroupPnL.toLocaleString('zh-TW', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) }} ({{ activeCustomGroupPnLPct.toFixed(2) }}%)
+            <div v-if="activeCustomGroupCategory === 'invest'" style="font-size: 0.85rem; font-weight: 700; margin-top: 4px;" :style="{ color: activeCustomGroupPnL >= 0 ? '#2ebd59' : '#ff453a' }">
+              群組績效：{{ activeCustomGroupPnL >= 0 ? '+' : '' }}{{ isHidden ? '••••' : activeCustomGroupPnL.toLocaleString('zh-TW', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) }} ({{ activeCustomGroupPnLPct >= 0 ? '+' : '' }}{{ activeCustomGroupPnLPct.toFixed(2) }}%)
             </div>
           </div>
 
