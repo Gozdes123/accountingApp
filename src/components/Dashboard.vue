@@ -1888,32 +1888,22 @@ const moneyFlowAnalysis = computed(() => {
   const datasets = trendDatasets.value
   if (datasets.length < 2) return null
   
-  const first = datasets[0]
   const last = datasets[datasets.length - 1]
+  const firstRealRecord = datasets.find(d => d.details && d.details.accounts)
   
+  // If there are no real records with account details, or only 1 day of real data exists, we cannot do a valid flow analysis
+  if (!firstRealRecord || firstRealRecord.date === last.date) return null
+  
+  const first = firstRealRecord
   const liqDiff = Math.round(last.liquid - first.liquid)
   const invDiff = Math.round(last.invest - first.invest)
   
   const firstDetails = first.details || {}
   const lastDetails = last.details || {}
-  
-  let finalFirstAccounts = firstDetails.accounts
-  if (!finalFirstAccounts && lastDetails.accounts) {
-    const totalLiq = accounts.value.filter(a => ['Bank', 'Cash', 'E-Wallet', 'OtherLiquid'].includes(a.type)).reduce((s, a) => s + Number(a.balance), 0)
-    finalFirstAccounts = {}
-    accounts.value.forEach(acc => {
-      if (['Bank', 'Cash', 'E-Wallet', 'OtherLiquid'].includes(acc.type)) {
-        const ratio = totalLiq > 0 ? Number(acc.balance) / totalLiq : 0
-        finalFirstAccounts[acc.id] = first.liquid * ratio
-      } else {
-        finalFirstAccounts[acc.id] = Number(acc.balance)
-      }
-    })
-  }
+  const finalFirstAccounts = firstDetails.accounts || {}
 
   const accChanges = []
-  const hasRealFirstDetails = !!(firstDetails && firstDetails.accounts)
-  if (hasRealFirstDetails && lastDetails.accounts) {
+  if (finalFirstAccounts && lastDetails.accounts) {
     Object.entries(lastDetails.accounts).forEach(([id, lastBal]) => {
       const firstBal = finalFirstAccounts[id]
       if (firstBal !== undefined) {
@@ -2014,61 +2004,79 @@ const moneyFlowAnalysis = computed(() => {
     })
   }
   
-  // Case 1: Cash decreased, Investment increased (Asset re-allocation)
-  if (liqDiff < 0 && invDiff > 0) {
-    const transferAmt = Math.min(Math.abs(liqDiff), invDiff)
+  let totalBuyAmtTwd = 0
+  if (periodLots.length > 0) {
+    periodLots.forEach(lot => {
+      const lotCost = Number(lot.quantity || 0) * Number(lot.buy_price || lot.average_cost || 0)
+      const lotCostTwd = Math.round(lot.currency === 'USD' ? lotCost * usdTwdRate.value : lotCost)
+      totalBuyAmtTwd += lotCostTwd
+    })
+  }
+
+  let totalSellAmtTwd = 0
+  if (sellTxList.length > 0) {
+    sellTxList.forEach(tx => {
+      const valTwd = Math.round(Number(tx.quantity || 0) * Number(tx.price || 0) * (tx.currency === 'USD' ? usdTwdRate.value : 1))
+      totalSellAmtTwd += valTwd
+    })
+  }
+  
+  const netFlow = totalSellAmtTwd - totalBuyAmtTwd
+
+  // Case 1: Net flow to stock market (bought more than sold)
+  if (netFlow < 0) {
+    const summary = totalSellAmtTwd > 0
+      ? `本期賣出股市部位 ${formatInvestNumber(totalSellAmtTwd)} 元，買入投入股市 ${formatInvestNumber(totalBuyAmtTwd)} 元。`
+      : `本期買入投入股市 ${formatInvestNumber(totalBuyAmtTwd)} 元。`
     return {
       type: 'reallocation',
       title: '資金配置轉移',
       icon: '🔄',
-      summary: `本期轉入股市投資約 ${formatInvestNumber(transferAmt)} 元。`,
+      summary,
       tradeProfitText,
       accountsFlow: accChanges,
       investFlow: flowItems
     }
   }
   
-  // Case 2: Cash decreased, and Investment also decreased (Outflow / Expense / Asset depreciation)
-  if (liqDiff < 0 && invDiff <= 0) {
+  // Case 3: Net flow from stock market (sold more than bought)
+  if (netFlow > 0) {
+    const summary = totalBuyAmtTwd > 0
+      ? `本期賣出股市部位 ${formatInvestNumber(totalSellAmtTwd)} 元，買入投入股市 ${formatInvestNumber(totalBuyAmtTwd)} 元。`
+      : `本期賣出股市部位 ${formatInvestNumber(totalSellAmtTwd)} 元。`
+    return {
+      type: 'cashout',
+      title: '投資部位變現',
+      icon: '🏦',
+      summary,
+      tradeProfitText,
+      accountsFlow: accChanges,
+      investFlow: flowItems
+    }
+  }
+  
+  // Case 2 & 4: No net stock transaction flow (netFlow === 0)
+  if (liqDiff < 0) {
     return {
       type: 'outflow',
       title: '日常支出與市值波動',
       icon: '💸',
-      summary: `本期流動資金減少 ${formatInvestNumber(Math.abs(liqDiff))} 元，投資部位縮水 ${formatInvestNumber(Math.abs(invDiff))} 元。`,
+      summary: `本期流動資金減少 ${formatInvestNumber(Math.abs(liqDiff))} 元，投資部位變動 ${formatInvestNumber(Math.abs(invDiff))} 元。`,
       tradeProfitText,
       accountsFlow: accChanges,
       investFlow: flowItems
     }
-  }
-  
-  // Case 3: Cash increased, Investment decreased (Selling investments / Cash-out)
-  if (liqDiff >= 0 && invDiff < 0) {
-    const cashOutAmt = Math.min(liqDiff, Math.abs(invDiff))
-    return {
-      type: 'cashout',
-      title: '投資獲利出場/變現',
-      icon: '🏦',
-      summary: `本期投資變現約 ${formatInvestNumber(cashOutAmt)} 元。`,
-      tradeProfitText,
-      accountsFlow: accChanges,
-      investFlow: flowItems
-    }
-  }
-  
-  // Case 4: Cash increased, Investment increased (Wealth accumulation)
-  if (liqDiff >= 0 && invDiff >= 0) {
+  } else {
     return {
       type: 'growth',
       title: '資產流動紀錄',
       icon: '📈',
-      summary: `本期流動資金增加 ${formatInvestNumber(liqDiff)} 元，投資部位成長 ${formatInvestNumber(invDiff)} 元。`,
+      summary: `本期流動資金增加 ${formatInvestNumber(liqDiff)} 元，投資部位變動 ${formatInvestNumber(invDiff)} 元。`,
       tradeProfitText,
       accountsFlow: accChanges,
       investFlow: flowItems
     }
   }
-  
-  return null
 })
 
 
@@ -4924,7 +4932,7 @@ onUnmounted(() => {
               <!-- 3-Column Summary Panel -->
               <div style="
                 display: grid; 
-                grid-template-columns: repeat(3, 1fr); 
+                grid-template-columns: repeat(3, minmax(0, 1fr)); 
                 gap: 12px; 
                 width: 100%;
               ">
@@ -4943,7 +4951,7 @@ onUnmounted(() => {
                     <div style="font-size: 0.72rem; font-weight: 800; color: var(--color-text-muted); margin-bottom: 6px; border-left: 2px solid var(--color-primary); padding-left: 6px;">總淨資產變動</div>
                     <div style="display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px;">
                       <span style="font-size: 0.95rem; font-weight: 900; color: var(--color-text); font-family: 'Outfit', sans-serif;">
-                        {{ isHidden ? '••••••' : formatInvestNumber(netWorthSummaryText.lastVal - netWorthSummaryText.startVal) }} 元
+                        {{ isHidden ? '••••••' : formatInvestNumber(Math.round(netWorthSummaryText.lastVal - netWorthSummaryText.startVal)) }} 元
                       </span>
                     </div>
                     <div :style="{ 
@@ -4952,11 +4960,12 @@ onUnmounted(() => {
                       fontWeight: '800',
                       marginTop: '2px'
                     }">
-                      {{ netWorthSummaryText.diff >= 0 ? '＋' : '－' }}{{ netWorthSummaryText.pct }}
+                      {{ netWorthSummaryText.pct }}
                     </div>
                   </div>
-                  <div style="font-size: 0.65rem; color: var(--color-text-muted); margin-top: 8px; border-top: 1px dashed rgba(0,0,0,0.04); padding-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
-                    期初：{{ formatInvestNumber(netWorthSummaryText.startVal) }} ➔ 目前：{{ formatInvestNumber(netWorthSummaryText.lastVal) }}
+                  <div style="font-size: 0.62rem; color: var(--color-text-muted); margin-top: 8px; border-top: 1px dashed rgba(0,0,0,0.04); padding-top: 6px; display: flex; flex-direction: column; gap: 2px;">
+                    <div style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">期初：{{ formatInvestNumber(Math.round(netWorthSummaryText.startVal)) }}</div>
+                    <div style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">目前：{{ formatInvestNumber(Math.round(netWorthSummaryText.lastVal)) }}</div>
                   </div>
                 </div>
 
@@ -4971,6 +4980,7 @@ onUnmounted(() => {
                   justify-content: space-between;
                   box-shadow: 0 2px 6px rgba(0,0,0,0.01);
                 ">
+                  <!-- Header -->
                   <div>
                     <div style="font-size: 0.72rem; font-weight: 800; color: var(--color-text-muted); margin-bottom: 6px; border-left: 2px solid #2ec173; padding-left: 6px;">流動資金變動</div>
                     <div style="display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px;">
@@ -4984,11 +4994,12 @@ onUnmounted(() => {
                       fontWeight: '800',
                       marginTop: '2px'
                     }">
-                      {{ liquidInvestSummaryText.liqDiff >= 0 ? '＋' : '' }}{{ liquidInvestSummaryText.liqPct }}
+                      {{ liquidInvestSummaryText.liqPct }}
                     </div>
                   </div>
-                  <div style="font-size: 0.65rem; color: var(--color-text-muted); margin-top: 8px; border-top: 1px dashed rgba(0,0,0,0.04); padding-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
-                    期初：{{ formatInvestNumber(Math.round(liquidInvestSummaryText.startLiq)) }} ➔ 目前：{{ formatInvestNumber(Math.round(liquidInvestSummaryText.lastLiq)) }}
+                  <div style="font-size: 0.62rem; color: var(--color-text-muted); margin-top: 8px; border-top: 1px dashed rgba(0,0,0,0.04); padding-top: 6px; display: flex; flex-direction: column; gap: 2px;">
+                    <div style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">期初：{{ formatInvestNumber(Math.round(liquidInvestSummaryText.startLiq)) }}</div>
+                    <div style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">目前：{{ formatInvestNumber(Math.round(liquidInvestSummaryText.lastLiq)) }}</div>
                   </div>
                 </div>
 
@@ -5016,11 +5027,12 @@ onUnmounted(() => {
                       fontWeight: '800',
                       marginTop: '2px'
                     }">
-                      {{ liquidInvestSummaryText.invDiff >= 0 ? '＋' : '' }}{{ liquidInvestSummaryText.invPct }}
+                      {{ liquidInvestSummaryText.invPct }}
                     </div>
                   </div>
-                  <div style="font-size: 0.65rem; color: var(--color-text-muted); margin-top: 8px; border-top: 1px dashed rgba(0,0,0,0.04); padding-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
-                    期初：{{ formatInvestNumber(Math.round(liquidInvestSummaryText.startInv)) }} ➔ 目前：{{ formatInvestNumber(Math.round(liquidInvestSummaryText.lastInv)) }}
+                  <div style="font-size: 0.62rem; color: var(--color-text-muted); margin-top: 8px; border-top: 1px dashed rgba(0,0,0,0.04); padding-top: 6px; display: flex; flex-direction: column; gap: 2px;">
+                    <div style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">期初：{{ formatInvestNumber(Math.round(liquidInvestSummaryText.startInv)) }}</div>
+                    <div style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">目前：{{ formatInvestNumber(Math.round(liquidInvestSummaryText.lastInv)) }}</div>
                   </div>
                 </div>
               </div>
@@ -5214,7 +5226,12 @@ onUnmounted(() => {
               color: trendSubTab === 'details' ? 'var(--color-primary)' : 'var(--color-text-muted)',
               borderBottom: trendSubTab === 'details' ? '2px solid var(--color-primary)' : '2px solid transparent',
               transition: 'all 0.2s ease',
-              marginBottom: '-1px'
+              marginBottom: '-1px',
+              boxShadow: 'none',
+              minHeight: 'unset',
+              height: 'auto',
+              outline: 'none',
+              borderRadius: '0'
             }"
           >
             當日變動明細
@@ -5231,7 +5248,12 @@ onUnmounted(() => {
               color: trendSubTab === 'flow' ? 'var(--color-primary)' : 'var(--color-text-muted)',
               borderBottom: trendSubTab === 'flow' ? '2px solid var(--color-primary)' : '2px solid transparent',
               transition: 'all 0.2s ease',
-              marginBottom: '-1px'
+              marginBottom: '-1px',
+              boxShadow: 'none',
+              minHeight: 'unset',
+              height: 'auto',
+              outline: 'none',
+              borderRadius: '0'
             }"
           >
             期間資金流向分析
@@ -5244,54 +5266,53 @@ onUnmounted(() => {
                background: var(--color-card-bg);
                border: 1px solid var(--color-card-border);
                border-radius: 16px;
-               padding: 16px;
+               padding: 20px;
                margin-bottom: 24px;
                text-align: left;
-               box-shadow: 0 4px 12px rgba(0, 0, 0, 0.02);
+               box-shadow: 0 4px 12px rgba(0, 0, 0, 0.01);
                transition: all 0.3s ease;
              "
         >
           <!-- Header Row -->
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; border-bottom: 1px solid rgba(92, 103, 245, 0.08); padding-bottom: 12px;">
-            <div style="display: flex; align-items: center; gap: 8px;">
-              <span style="font-size: 0.9rem; font-weight: 800; color: var(--color-text); letter-spacing: 0.3px;">{{ selectedHistoryDetails.date }} 淨值變動明細</span>
-            </div>
-            <span style="font-size: 0.72rem; color: var(--color-text-muted); font-weight: 500; opacity: 0.8;">（點擊圖表節點切換）</span>
+          <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 18px; border-bottom: 1px solid var(--color-card-border); padding-bottom: 12px; flex-wrap: wrap; gap: 8px;">
+            <span style="font-size: 0.95rem; font-weight: 800; color: var(--color-text); letter-spacing: 0.3px;">{{ selectedHistoryDetails.date }} 淨值變動明細</span>
+            <span style="font-size: 0.72rem; color: var(--color-text-muted); font-weight: 500;">點擊圖表節點切換</span>
           </div>
           
           <!-- Net Worth Info Row -->
-          <div style="display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 20px; background: rgba(92, 103, 245, 0.03); padding: 12px 16px; border-radius: 12px; border: 1px solid rgba(92, 103, 245, 0.06);">
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; background: rgba(0, 0, 0, 0.015); padding: 12px 16px; border-radius: 12px; border: 1px solid var(--color-card-border); flex-wrap: wrap; gap: 12px;">
             <div>
-              <div style="font-size: 0.75rem; color: var(--color-text-muted); font-weight: 700; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px;">當日淨資產</div>
+              <div style="font-size: 0.72rem; color: var(--color-text-muted); font-weight: 800; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px;">當日淨資產</div>
               <div style="font-size: 1.25rem; font-weight: 900; color: var(--color-text); font-family: 'Outfit', sans-serif;">
-                {{ isHidden ? '••••••' : formatInvestNumber(selectedHistoryDetails.netWorth) }} <span style="font-size: 0.85rem; font-weight: 700; color: var(--color-text-muted);">元</span>
+                {{ isHidden ? '••••••' : formatInvestNumber(selectedHistoryDetails.netWorth) }} <span style="font-size: 0.82rem; font-weight: 700; color: var(--color-text-muted);">元</span>
               </div>
             </div>
-            <div v-if="selectedHistoryDetails.diff !== 0" style="display: flex; align-items: center; gap: 8px; align-self: flex-end; margin-bottom: 2px;">
+            <div v-if="selectedHistoryDetails.diff !== 0" style="display: flex; align-items: center; gap: 8px;">
               <span style="font-size: 0.72rem; color: var(--color-text-muted); font-weight: 600;">較前一天</span>
               <span :style="{ 
                 color: selectedHistoryDetails.diff >= 0 ? 'var(--color-success)' : 'var(--color-danger)', 
-                fontSize: '0.85rem', 
+                fontSize: '0.82rem', 
                 fontWeight: '800',
-                background: selectedHistoryDetails.diff >= 0 ? 'rgba(46, 193, 115, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+                background: selectedHistoryDetails.diff >= 0 ? 'rgba(46, 189, 89, 0.08)' : 'rgba(255, 69, 58, 0.08)',
                 padding: '4px 10px',
                 borderRadius: '8px',
-                display: 'inline-block'
+                display: 'inline-block',
+                fontFamily: 'Outfit, sans-serif'
               }">
-                {{ selectedHistoryDetails.diff >= 0 ? '＋' : '－' }}{{ formatInvestNumber(Math.abs(selectedHistoryDetails.diff)) }} 元
+                {{ selectedHistoryDetails.diff >= 0 ? '+' : '-' }}{{ formatInvestNumber(Math.abs(selectedHistoryDetails.diff)) }} 元
               </span>
             </div>
-            <div v-else style="font-size: 0.8rem; color: var(--color-text-muted); font-weight: 700; align-self: flex-end; margin-bottom: 6px;">
+            <div v-else style="font-size: 0.78rem; color: var(--color-text-muted); font-weight: 700; background: rgba(0, 0, 0, 0.04); padding: 4px 10px; border-radius: 8px;">
               無變動
             </div>
           </div>
 
           <!-- Changes List (Grouped by Asset Category) -->
-          <div v-if="selectedHistoryDetails.hasChanges" style="display: flex; flex-direction: column; gap: 14px; width: 100%;">
+          <div v-if="selectedHistoryDetails.hasChanges" style="display: flex; flex-direction: column; gap: 16px; width: 100%;">
             
             <!-- Group 1: 流動資金帳戶 -->
             <div v-if="selectedHistoryDetails.liquidChanges.length > 0" style="display: flex; flex-direction: column; gap: 4px;">
-              <div style="font-size: 0.72rem; font-weight: 800; color: var(--color-text-muted); border-left: 2.5px solid var(--color-primary); padding-left: 8px; margin-bottom: 6px; letter-spacing: 0.5px; text-transform: uppercase;">
+              <div style="font-size: 0.72rem; font-weight: 800; color: var(--color-text-muted); border-left: 2px solid var(--color-primary); padding-left: 8px; margin-bottom: 6px; letter-spacing: 0.5px; text-transform: uppercase;">
                 流動資金帳戶
               </div>
               
@@ -5300,44 +5321,34 @@ onUnmounted(() => {
                      display: flex; 
                      justify-content: space-between; 
                      align-items: center; 
-                     padding: 6px 6px; 
+                     padding: 8px 6px; 
                      border-radius: 8px;
                      transition: all 0.2s ease;
                    "
-                   onmouseover="this.style.background='rgba(92,103,245,0.03)'"
+                   onmouseover="this.style.background='rgba(0, 0, 0, 0.02)'"
                    onmouseout="this.style.background='transparent'"
               >
-                <div style="display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0;">
-                  <span :style="{ 
-                    width: '6px', 
-                    height: '6px', 
-                    borderRadius: '50%', 
-                    flexShrink: 0,
-                    background: chg.diffTwd >= 0 ? 'var(--color-success)' : 'var(--color-danger)',
-                    boxShadow: chg.diffTwd >= 0 ? '0 0 6px rgba(46, 193, 115, 0.6)' : '0 0 6px rgba(239, 68, 68, 0.6)'
-                  }"></span>
-                  
-                  <div style="display: flex; flex-direction: column; align-items: flex-start; text-align: left; min-width: 0;">
-                    <span style="color: var(--color-text); font-size: 0.82rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 180px;">{{ chg.name }}</span>
-                    <span v-if="chg.currency !== 'TWD'" style="font-size: 0.68rem; color: var(--color-text-muted); margin-top: 2px; font-weight: 600; background: rgba(0, 0, 0, 0.04); padding: 1px 5px; border-radius: 4px;">
-                      原幣：{{ chg.diff >= 0 ? '＋' : '－' }}{{ chg.currency }} {{ formatInvestNumber(Math.abs(chg.diff)) }}
-                    </span>
-                  </div>
+                <div style="display: flex; flex-direction: column; align-items: flex-start; text-align: left; min-width: 0; flex: 1; padding-right: 12px;">
+                  <span style="color: var(--color-text); font-size: 0.82rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;">{{ chg.name }}</span>
+                  <span v-if="chg.currency !== 'TWD'" style="font-size: 0.68rem; color: var(--color-text-muted); margin-top: 2px; font-weight: 600; background: rgba(0, 0, 0, 0.04); padding: 1px 5px; border-radius: 4px; align-self: flex-start;">
+                    原幣：{{ chg.diff >= 0 ? '+' : '-' }}{{ chg.currency }} {{ formatInvestNumber(Math.abs(chg.diff)) }}
+                  </span>
                 </div>
                 <span :style="{ 
                   fontWeight: '800', 
                   fontSize: '0.85rem',
                   color: chg.diffTwd >= 0 ? 'var(--color-success)' : 'var(--color-danger)',
-                  fontFamily: 'Outfit, sans-serif'
+                  fontFamily: 'Outfit, sans-serif',
+                  flexShrink: 0
                 }">
-                  {{ chg.diffTwd >= 0 ? '＋' : '－' }}{{ formatInvestNumber(Math.abs(chg.diffTwd)) }} 元
+                  {{ chg.diffTwd >= 0 ? '+' : '-' }}{{ formatInvestNumber(Math.abs(chg.diffTwd)) }} 元
                 </span>
               </div>
             </div>
 
             <!-- Group 2: 投資資產估值 -->
             <div v-if="selectedHistoryDetails.investChanges.length > 0" style="display: flex; flex-direction: column; gap: 4px;">
-              <div style="font-size: 0.72rem; font-weight: 800; color: var(--color-text-muted); border-left: 2.5px solid #a855f7; padding-left: 8px; margin-bottom: 6px; letter-spacing: 0.5px; text-transform: uppercase;">
+              <div style="font-size: 0.72rem; font-weight: 800; color: var(--color-text-muted); border-left: 2px solid #a855f7; padding-left: 8px; margin-bottom: 6px; letter-spacing: 0.5px; text-transform: uppercase;">
                 投資資產估值
               </div>
               
@@ -5346,38 +5357,34 @@ onUnmounted(() => {
                      display: flex; 
                      justify-content: space-between; 
                      align-items: center; 
-                     padding: 6px 6px; 
+                     padding: 8px 6px; 
                      border-radius: 8px;
                      transition: all 0.2s ease;
                    "
-                   onmouseover="this.style.background='rgba(92,103,245,0.03)'"
+                   onmouseover="this.style.background='rgba(0, 0, 0, 0.02)'"
                    onmouseout="this.style.background='transparent'"
               >
-                <div style="display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0;">
-                  <span :style="{ 
-                    width: '6px', 
-                    height: '6px', 
-                    borderRadius: '50%', 
-                    flexShrink: 0,
-                    background: chg.diffTwd >= 0 ? 'var(--color-success)' : 'var(--color-danger)',
-                    boxShadow: chg.diffTwd >= 0 ? '0 0 6px rgba(46, 193, 115, 0.6)' : '0 0 6px rgba(239, 68, 68, 0.6)'
-                  }"></span>
-                  <span style="color: var(--color-text); font-size: 0.82rem; font-weight: 700; text-align: left;">{{ chg.name }}</span>
+                <div style="display: flex; flex-direction: column; align-items: flex-start; text-align: left; min-width: 0; flex: 1; padding-right: 12px;">
+                  <span style="color: var(--color-text); font-size: 0.82rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;">{{ chg.name }}</span>
+                  <span v-if="chg.currency !== 'TWD'" style="font-size: 0.68rem; color: var(--color-text-muted); margin-top: 2px; font-weight: 600; background: rgba(0, 0, 0, 0.04); padding: 1px 5px; border-radius: 4px; align-self: flex-start;">
+                    原幣：{{ chg.diff >= 0 ? '+' : '-' }}{{ chg.currency }} {{ formatInvestNumber(Math.abs(chg.diff)) }}
+                  </span>
                 </div>
                 <span :style="{ 
                   fontWeight: '800', 
                   fontSize: '0.85rem',
                   color: chg.diffTwd >= 0 ? 'var(--color-success)' : 'var(--color-danger)',
-                  fontFamily: 'Outfit, sans-serif'
+                  fontFamily: 'Outfit, sans-serif',
+                  flexShrink: 0
                 }">
-                  {{ chg.diffTwd >= 0 ? '＋' : '－' }}{{ formatInvestNumber(Math.abs(chg.diffTwd)) }} 元
+                  {{ chg.diffTwd >= 0 ? '+' : '-' }}{{ formatInvestNumber(Math.abs(chg.diffTwd)) }} 元
                 </span>
               </div>
             </div>
 
             <!-- Group 3: 負債項目變動 -->
             <div v-if="selectedHistoryDetails.liabChanges.length > 0" style="display: flex; flex-direction: column; gap: 4px;">
-              <div style="font-size: 0.72rem; font-weight: 800; color: var(--color-text-muted); border-left: 2.5px solid #f97316; padding-left: 8px; margin-bottom: 6px; letter-spacing: 0.5px; text-transform: uppercase;">
+              <div style="font-size: 0.72rem; font-weight: 800; color: var(--color-text-muted); border-left: 2px solid #f97316; padding-left: 8px; margin-bottom: 6px; letter-spacing: 0.5px; text-transform: uppercase;">
                 負債項目變動
               </div>
               
@@ -5386,73 +5393,80 @@ onUnmounted(() => {
                      display: flex; 
                      justify-content: space-between; 
                      align-items: center; 
-                     padding: 6px 6px; 
+                     padding: 8px 6px; 
                      border-radius: 8px;
                      transition: all 0.2s ease;
                    "
-                   onmouseover="this.style.background='rgba(92,103,245,0.03)'"
+                   onmouseover="this.style.background='rgba(0, 0, 0, 0.02)'"
                    onmouseout="this.style.background='transparent'"
               >
-                <div style="display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0;">
-                  <span :style="{ 
-                    width: '6px', 
-                    height: '6px', 
-                    borderRadius: '50%', 
-                    flexShrink: 0,
-                    background: chg.diffTwd >= 0 ? 'var(--color-success)' : 'var(--color-danger)',
-                    boxShadow: chg.diffTwd >= 0 ? '0 0 6px rgba(46, 193, 115, 0.6)' : '0 0 6px rgba(239, 68, 68, 0.6)'
-                  }"></span>
-                  <div style="display: flex; flex-direction: column; align-items: flex-start; text-align: left; min-width: 0;">
-                    <span style="color: var(--color-text); font-size: 0.82rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 180px;">{{ chg.name }}</span>
-                    <span v-if="chg.currency !== 'TWD'" style="font-size: 0.68rem; color: var(--color-text-muted); margin-top: 2px; font-weight: 600; background: rgba(0, 0, 0, 0.04); padding: 1px 5px; border-radius: 4px;">
-                      原幣：{{ chg.diff >= 0 ? '＋' : '－' }}{{ chg.currency }} {{ formatInvestNumber(Math.abs(chg.diff)) }}
-                    </span>
-                  </div>
+                <div style="display: flex; flex-direction: column; align-items: flex-start; text-align: left; min-width: 0; flex: 1; padding-right: 12px;">
+                  <span style="color: var(--color-text); font-size: 0.82rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;">{{ chg.name }}</span>
+                  <span v-if="chg.currency !== 'TWD'" style="font-size: 0.68rem; color: var(--color-text-muted); margin-top: 2px; font-weight: 600; background: rgba(0, 0, 0, 0.04); padding: 1px 5px; border-radius: 4px; align-self: flex-start;">
+                    原幣：{{ chg.diff >= 0 ? '+' : '-' }}{{ chg.currency }} {{ formatInvestNumber(Math.abs(chg.diff)) }}
+                  </span>
                 </div>
                 <span :style="{ 
                   fontWeight: '800', 
                   fontSize: '0.85rem',
                   color: chg.diffTwd >= 0 ? 'var(--color-success)' : 'var(--color-danger)',
-                  fontFamily: 'Outfit, sans-serif'
+                  fontFamily: 'Outfit, sans-serif',
+                  flexShrink: 0
                 }">
-                  {{ chg.diffTwd >= 0 ? '＋' : '－' }}{{ formatInvestNumber(Math.abs(chg.diffTwd)) }} 元
+                  {{ chg.diffTwd >= 0 ? '+' : '-' }}{{ formatInvestNumber(Math.abs(chg.diffTwd)) }} 元
                 </span>
               </div>
             </div>
 
           </div>
-          <div v-else style="font-size: 0.8rem; color: var(--color-text-muted); text-align: center; padding: 20px 0; background: rgba(0,0,0,0.01); border-radius: 12px; border: 1px dashed rgba(0,0,0,0.04);">
+          <div v-else style="font-size: 0.8rem; color: var(--color-text-muted); text-align: center; padding: 24px 0; background: rgba(0,0,0,0.01); border-radius: 12px; border: 1px dashed var(--color-card-border);">
             當天各帳目金額無明顯變動。
           </div>
 
           <!-- Daily Transactions list -->
           <div v-if="selectedHistoryDetails.transactions.length > 0" 
                style="
-                 margin-top: 16px; 
-                 padding-top: 14px; 
-                 border-top: 1px dashed rgba(92, 103, 245, 0.15); 
+                 margin-top: 20px; 
+                 padding-top: 16px; 
+                 border-top: 1px dashed var(--color-card-border); 
                  display: flex; 
                  flex-direction: column; 
                  gap: 8px;
                "
           >
-            <div style="font-size: 0.75rem; font-weight: 800; color: var(--color-text-muted); letter-spacing: 0.5px;">當日交易事件</div>
+            <div style="font-size: 0.72rem; font-weight: 800; color: var(--color-text-muted); letter-spacing: 0.5px; border-left: 2px solid var(--color-primary); padding-left: 8px; margin-bottom: 6px; text-transform: uppercase;">當日交易事件</div>
             <div v-for="(tx, idx) in selectedHistoryDetails.transactions" :key="idx" 
                  style="
                    display: flex; 
                    align-items: center; 
-                   gap: 8px; 
+                   justify-content: space-between;
                    font-size: 0.8rem; 
-                   color: var(--color-primary); 
-                   font-weight: 700;
-                   background: rgba(92, 103, 245, 0.04);
-                   padding: 6px 12px;
+                   color: var(--color-text); 
+                   font-weight: 600;
+                   background: rgba(0, 0, 0, 0.015);
+                   padding: 8px 12px;
                    border-radius: 8px;
-                   border: 1px solid rgba(92, 103, 245, 0.08);
+                   border: 1px solid var(--color-card-border);
                  "
             >
-              <span style="display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--color-primary); flex-shrink: 0;"></span>
-              <span>{{ tx.type === 'buy' ? '買入' : '賣出' }} {{ tx.symbol }} {{ tx.quantity }} 股 (價格: {{ tx.currency }} {{ tx.price || tx.buy_price }})</span>
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span :style="{
+                  display: 'inline-block',
+                  padding: '2px 6px',
+                  borderRadius: '4px',
+                  fontSize: '0.68rem',
+                  fontWeight: '800',
+                  color: tx.type === 'buy' ? 'var(--color-success)' : 'var(--color-danger)',
+                  background: tx.type === 'buy' ? 'rgba(46, 189, 89, 0.08)' : 'rgba(255, 69, 58, 0.08)'
+                }">
+                  {{ tx.type === 'buy' ? '買入' : '賣出' }}
+                </span>
+                <span style="font-weight: 700;">{{ tx.symbol }}</span>
+                <span style="color: var(--color-text-muted); font-size: 0.75rem;">{{ tx.quantity }} 股</span>
+              </div>
+              <span style="font-family: 'Outfit', sans-serif; font-size: 0.8rem; color: var(--color-text-muted);">
+                價格: {{ tx.currency }} {{ tx.price || tx.buy_price }}
+              </span>
             </div>
           </div>
         </div>
@@ -5464,27 +5478,59 @@ onUnmounted(() => {
             background: var(--color-card-bg);
             border: 1px solid var(--color-card-border);
             border-radius: 16px;
-            padding: 16px;
+            padding: 20px;
             margin-bottom: 24px;
             text-align: left;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.02);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.01);
           "
         >
-          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
-            <span style="font-size: 0.88rem; font-weight: 700; color: var(--color-text);">{{ moneyFlowAnalysis.title }}</span>
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; border-bottom: 1px solid var(--color-card-border); padding-bottom: 12px;">
+            <span style="font-size: 0.9rem; font-weight: 800; color: var(--color-text); letter-spacing: 0.3px;">{{ moneyFlowAnalysis.title }}</span>
             <button 
               @click="showFlowAnalysisModal = true"
-              style="background: rgba(92, 103, 245, 0.08); border: none; border-radius: 8px; padding: 6px 12px; color: #5c67f5; cursor: pointer; font-size: 0.78rem; font-weight: 700; transition: all 0.2s; outline: none;"
+              style="
+                background: rgba(0, 0, 0, 0.03); 
+                border: 1px solid var(--color-card-border); 
+                border-radius: 8px; 
+                padding: 6px 12px; 
+                color: var(--color-text); 
+                cursor: pointer; 
+                font-size: 0.78rem; 
+                font-weight: 700; 
+                transition: all 0.2s; 
+                outline: none;
+                box-shadow: none;
+                min-height: unset;
+                height: auto;
+              "
+              onmouseover="this.style.background='rgba(0,0,0,0.06)'"
+              onmouseout="this.style.background='rgba(0,0,0,0.03)'"
             >
               明細
             </button>
           </div>
-          <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 12px;">
-            <p style="font-size: 0.82rem; line-height: 1.5; color: var(--color-text-muted); margin: 0;">
+          <div style="display: flex; flex-direction: column; gap: 10px;">
+            <p style="font-size: 0.82rem; line-height: 1.6; color: var(--color-text-muted); margin: 0; font-weight: 500;">
               {{ moneyFlowAnalysis.summary }}
             </p>
-            <div v-if="moneyFlowAnalysis.tradeProfitText" style="display: flex; align-items: center; gap: 6px; font-size: 0.78rem; color: var(--color-primary); font-weight: 600;">
-              <span style="display: inline-block; width: 4px; height: 4px; border-radius: 50%; background: var(--color-primary);"></span>
+            <div 
+              v-if="moneyFlowAnalysis.tradeProfitText" 
+              style="
+                display: flex; 
+                align-items: center; 
+                gap: 8px; 
+                font-size: 0.78rem; 
+                font-weight: 700; 
+                padding: 6px 12px; 
+                border-radius: 8px; 
+                align-self: flex-start;
+              "
+              :style="{
+                background: moneyFlowAnalysis.tradeProfitText.includes('獲利') ? 'rgba(46, 189, 89, 0.08)' : 'rgba(255, 69, 58, 0.08)',
+                color: moneyFlowAnalysis.tradeProfitText.includes('獲利') ? 'var(--color-success)' : 'var(--color-danger)',
+                border: moneyFlowAnalysis.tradeProfitText.includes('獲利') ? '1px solid rgba(46, 189, 89, 0.12)' : '1px solid rgba(255, 69, 58, 0.12)'
+              }"
+            >
               <span>{{ moneyFlowAnalysis.tradeProfitText.replace('（', '').replace('）', '') }}</span>
             </div>
           </div>
@@ -7111,20 +7157,9 @@ onUnmounted(() => {
 
         <div class="modal-content-full" v-if="moneyFlowAnalysis">
           <!-- Premium Summary Header -->
-          <div style="display: flex; flex-direction: column; align-items: center; text-align: center; margin: 24px 0 32px 0;">
-            <div style="width: 64px; height: 64px; border-radius: 20px; background: rgba(92,103,245,0.08); display: flex; align-items: center; justify-content: center; color: var(--color-primary); margin-bottom: 16px; border: 1px solid rgba(92,103,245,0.15);">
-              <component 
-                :is="
-                  moneyFlowAnalysis.type === 'growth' ? PhCoins :
-                  moneyFlowAnalysis.type === 'outflow' ? PhMinusCircle :
-                  moneyFlowAnalysis.type === 'cashout' ? PhBank : PhTrendUp
-                " 
-                size="32" 
-                weight="duotone" 
-              />
-            </div>
-            <div style="font-size: 1.35rem; font-weight: 800; color: var(--color-text);">{{ moneyFlowAnalysis.title }}</div>
-            <div style="font-size: 0.92rem; color: var(--color-text-muted); margin-top: 8px; line-height: 1.5; padding: 0 16px;">
+          <div style="display: flex; flex-direction: column; align-items: center; text-align: center; margin: 24px 0 28px 0; border-bottom: 1px dashed var(--color-card-border); padding-bottom: 24px;">
+            <div style="font-size: 1.25rem; font-weight: 800; color: var(--color-text);">{{ moneyFlowAnalysis.title }}</div>
+            <div style="font-size: 0.85rem; color: var(--color-text-muted); margin-top: 10px; line-height: 1.6; padding: 0 16px; font-weight: 500;">
               {{ moneyFlowAnalysis.summary }}
             </div>
           </div>
@@ -7132,46 +7167,39 @@ onUnmounted(() => {
           <!-- Realized profit/loss badge if any -->
           <div 
             v-if="moneyFlowAnalysis.tradeProfitText" 
-            style="margin-bottom: 28px; border-radius: 16px; padding: 14px 18px; display: flex; align-items: center; gap: 12px;"
-            :style="{ 
-              background: moneyFlowAnalysis.tradeProfitText.includes('獲利') ? 'rgba(46, 189, 89, 0.06)' : 'rgba(255, 69, 58, 0.06)', 
-              border: moneyFlowAnalysis.tradeProfitText.includes('獲利') ? '1px solid rgba(46, 189, 89, 0.12)' : '1px solid rgba(255, 69, 58, 0.12)' 
-            }"
+            style="
+              margin-bottom: 28px; 
+              border-radius: 12px; 
+              padding: 12px 16px; 
+              display: flex; 
+              align-items: center; 
+              background: rgba(0, 0, 0, 0.015);
+              border: 1px solid var(--color-card-border);
+            "
           >
-            <div 
-              style="width: 36px; height: 36px; border-radius: 10px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;"
-              :style="{
-                background: moneyFlowAnalysis.tradeProfitText.includes('獲利') ? 'rgba(46, 189, 89, 0.1)' : 'rgba(255, 69, 58, 0.1)',
-                color: moneyFlowAnalysis.tradeProfitText.includes('獲利') ? '#2ebd59' : '#ff453a'
-              }"
-            >
-              <PhTrendUp v-if="moneyFlowAnalysis.tradeProfitText.includes('獲利')" size="20" weight="bold" />
-              <PhMinusCircle v-else size="20" weight="bold" />
-            </div>
-            <div style="display: flex; flex-direction: column; text-align: left;">
-              <span style="font-size: 0.72rem; color: var(--color-text-muted); font-weight: bold; letter-spacing: 0.5px; text-transform: uppercase;">本期交易損益</span>
+            <div style="display: flex; flex-direction: column; text-align: left; width: 100%;">
+              <span style="font-size: 0.72rem; color: var(--color-text-muted); font-weight: 800; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 4px;">本期交易損益</span>
               <span 
-                style="font-size: 0.95rem; font-weight: 800; margin-top: 2px;"
-                :style="{ color: moneyFlowAnalysis.tradeProfitText.includes('獲利') ? '#2ebd59' : '#ff453a' }"
+                style="font-size: 0.95rem; font-weight: 800;"
+                :style="{ color: moneyFlowAnalysis.tradeProfitText.includes('獲利') ? 'var(--color-success)' : 'var(--color-danger)' }"
               >
                 {{ moneyFlowAnalysis.tradeProfitText.replace('（', '').replace('）', '') }}
               </span>
             </div>
           </div>
 
-          <!-- Section 1: Accounts Flow using native settings-table items -->
-          <div v-if="moneyFlowAnalysis.accountsFlow && moneyFlowAnalysis.accountsFlow.length > 0" style="margin-bottom: 32px; text-align: left;">
-            <div style="font-size: 0.82rem; font-weight: bold; color: var(--color-text-muted); margin-bottom: 12px; letter-spacing: 0.5px; text-transform: uppercase; display: flex; align-items: center; gap: 6px;">
-              <PhBank size="16" weight="bold" />
-              <span>帳戶餘額變動</span>
+          <!-- Section 1: Accounts Flow -->
+          <div v-if="moneyFlowAnalysis.accountsFlow && moneyFlowAnalysis.accountsFlow.length > 0" style="margin-bottom: 28px; text-align: left;">
+            <div style="font-size: 0.75rem; font-weight: 800; color: var(--color-text-muted); margin-bottom: 10px; border-left: 2.5px solid var(--color-primary); padding-left: 8px; letter-spacing: 0.5px; text-transform: uppercase;">
+              帳戶餘額變動
             </div>
-            <div class="settings-table-list" style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); border-radius: 16px; padding: 6px 12px;">
-              <div v-for="ac in moneyFlowAnalysis.accountsFlow" :key="ac.name" class="settings-table-item" style="cursor: default; padding: 12px 6px;">
-                <div class="item-meta">
-                  <span class="item-name">{{ ac.name }}</span>
+            <div class="settings-table-list" style="background: rgba(0, 0, 0, 0.015); border: 1px solid var(--color-card-border); border-radius: 12px; padding: 4px 12px;">
+              <div v-for="ac in moneyFlowAnalysis.accountsFlow" :key="ac.name" class="settings-table-item" style="cursor: default; padding: 10px 0; border-bottom: 1px solid rgba(0, 0, 0, 0.03); justify-content: space-between;" onmouseover="this.style.background='transparent'">
+                <div class="item-meta" style="text-align: left;">
+                  <span class="item-name" style="font-size: 0.82rem; font-weight: 700; color: var(--color-text);">{{ ac.name }}</span>
                 </div>
                 <div class="item-right-wrap">
-                  <span :style="{ color: ac.diff >= 0 ? '#2ebd59' : '#ff453a', fontWeight: '800', fontSize: '0.92rem' }">
+                  <span :style="{ color: ac.diff >= 0 ? 'var(--color-success)' : 'var(--color-danger)', fontWeight: '800', fontSize: '0.85rem', fontFamily: 'Outfit, sans-serif' }">
                     {{ ac.diff >= 0 ? '+' : '' }}{{ formatInvestNumber(ac.diff) }} 元
                   </span>
                 </div>
@@ -7179,39 +7207,37 @@ onUnmounted(() => {
             </div>
           </div>
 
-          <!-- Section 2: Invest Flow using custom design-rich row cards -->
+          <!-- Section 2: Invest Flow -->
           <div v-if="moneyFlowAnalysis.investFlow && moneyFlowAnalysis.investFlow.length > 0" style="margin-bottom: 32px; text-align: left;">
-            <div style="font-size: 0.82rem; font-weight: bold; color: var(--color-text-muted); margin-bottom: 12px; letter-spacing: 0.5px; text-transform: uppercase; display: flex; align-items: center; gap: 6px;">
-              <PhCoins size="16" weight="bold" />
-              <span>投資資金流向軌跡</span>
+            <div style="font-size: 0.75rem; font-weight: 800; color: var(--color-text-muted); margin-bottom: 10px; border-left: 2.5px solid #a855f7; padding-left: 8px; letter-spacing: 0.5px; text-transform: uppercase;">
+              投資資金流向軌跡
             </div>
-            <div style="display: flex; flex-direction: column; gap: 12px;">
+            <div style="display: flex; flex-direction: column; gap: 10px;">
               <div v-for="(item, idx) in moneyFlowAnalysis.investFlow" :key="idx" 
-                   style="display: flex; align-items: center; gap: 14px; padding: 14px 16px; border-radius: 16px; border: 1px solid;"
-                   :style="{
-                     background: item.type === 'sell' ? 'rgba(46, 189, 89, 0.05)' : 'rgba(92, 103, 245, 0.05)',
-                     borderColor: item.type === 'sell' ? 'rgba(46, 189, 89, 0.12)' : 'rgba(92, 103, 245, 0.12)'
-                   }">
-                <div style="width: 32px; height: 32px; border-radius: 10px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;"
-                     :style="{
-                       background: item.type === 'sell' ? 'rgba(46, 189, 89, 0.08)' : 'rgba(92, 103, 245, 0.08)',
-                       color: item.type === 'sell' ? '#2ebd59' : '#5c67f5'
-                     }">
-                  <PhPlus v-if="item.type === 'sell'" size="16" weight="bold" />
-                  <PhCoins v-else size="16" weight="bold" />
-                </div>
-                <div style="display: flex; flex-direction: column; text-align: left;">
-                  <span style="font-size: 0.88rem; font-weight: 700; color: var(--color-text);">
+                   style="display: flex; flex-direction: column; gap: 6px; padding: 12px 16px; border-radius: 12px; border: 1px solid var(--color-card-border); background: rgba(0, 0, 0, 0.015);">
+                <div style="display: flex; align-items: center; justify-content: space-between;">
+                  <span style="font-size: 0.82rem; font-weight: 800; color: var(--color-text);">
                     {{ item.type === 'sell' ? '賣出變現匯入' : '資金流入股市' }}
                   </span>
-                  <span style="font-size: 0.82rem; color: var(--color-text-muted); margin-top: 4px; font-weight: 500;">
-                    <template v-if="item.type === 'buy'">
-                      從 <strong style="color: var(--color-text);">{{ item.accountName }}</strong> 流出 ➡️ <span style="color: var(--color-primary); font-weight: 600;">{{ item.stockDetails }}</span>
-                    </template>
-                    <template v-else>
-                      變現 <span style="color: #2ebd59; font-weight: 600;">{{ item.stockDetails }}</span> ➡️ 匯入 <strong style="color: var(--color-text);">{{ item.accountName }}</strong>
-                    </template>
+                  <span :style="{
+                    display: 'inline-block',
+                    padding: '2px 6px',
+                    borderRadius: '4px',
+                    fontSize: '0.68rem',
+                    fontWeight: '800',
+                    color: item.type === 'sell' ? 'var(--color-success)' : 'var(--color-primary)',
+                    background: item.type === 'sell' ? 'rgba(46, 189, 89, 0.08)' : 'rgba(92, 103, 245, 0.08)'
+                  }">
+                    {{ item.type === 'sell' ? '賣出' : '買入' }}
                   </span>
+                </div>
+                <div style="font-size: 0.8rem; color: var(--color-text-muted); font-weight: 500; margin-top: 2px;">
+                  <template v-if="item.type === 'buy'">
+                    從 <strong style="color: var(--color-text); font-weight: 700;">{{ item.accountName }}</strong> 流出 ➔ <span style="color: var(--color-primary); font-weight: 700;">{{ item.stockDetails }}</span>
+                  </template>
+                  <template v-else>
+                    變現 <span style="color: var(--color-success); font-weight: 700;">{{ item.stockDetails }}</span> ➔ 匯入 <strong style="color: var(--color-text); font-weight: 700;">{{ item.accountName }}</strong>
+                  </template>
                 </div>
               </div>
             </div>
@@ -7220,7 +7246,23 @@ onUnmounted(() => {
           <!-- Bottom Close Button -->
           <button 
             @click="showFlowAnalysisModal = false"
-            style="width: 100%; padding: 16px; border-radius: 16px; background: var(--color-primary); color: #ffffff; font-weight: 700; border: none; cursor: pointer; font-size: 0.95rem; margin-top: 12px; box-shadow: none;"
+            style="
+              width: 100%; 
+              padding: 14px; 
+              border-radius: 12px; 
+              background: rgba(0, 0, 0, 0.04); 
+              color: var(--color-text); 
+              font-weight: 700; 
+              border: 1px solid var(--color-card-border); 
+              cursor: pointer; 
+              font-size: 0.9rem; 
+              margin-top: 12px; 
+              box-shadow: none;
+              min-height: unset;
+              height: auto;
+            "
+            onmouseover="this.style.background='rgba(0, 0, 0, 0.08)'"
+            onmouseout="this.style.background='rgba(0, 0, 0, 0.04)'"
           >
             關閉
           </button>
