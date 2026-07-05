@@ -4638,7 +4638,7 @@ onUnmounted(() => {
                             fontSize: '0.78rem',
                             fontWeight: '700'
                           }">
-                            {{ item.pnl >= 0 ? '+' : '' }}{{ isHidden ? '••••' : Math.round(item.pnl).toLocaleString('zh-TW') }} ({{ item.pnl >= 0 ? '+' : '' }}{{ item.pnlPct.toFixed(2) }}%)
+                            {{ item.pnl >= 0 ? '+' : '' }}{{ isHidden ? '••••' : Math.round(item.pnl).toLocaleString('zh-TW') }} ({{ isHidden ? '••••%' : (item.pnl >= 0 ? '+' : '') + item.pnlPct.toFixed(2) + '%' }})
                           </div>
                         </div>
                       </div>
@@ -4964,8 +4964,8 @@ onUnmounted(() => {
                     </div>
                   </div>
                   <div style="font-size: 0.62rem; color: var(--color-text-muted); margin-top: 8px; border-top: 1px dashed rgba(0,0,0,0.04); padding-top: 6px; display: flex; flex-direction: column; gap: 2px;">
-                    <div style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">期初：{{ formatInvestNumber(Math.round(netWorthSummaryText.startVal)) }}</div>
-                    <div style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">目前：{{ formatInvestNumber(Math.round(netWorthSummaryText.lastVal)) }}</div>
+                    <div style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">期初：{{ isHidden ? '••••••' : formatInvestNumber(Math.round(netWorthSummaryText.startVal)) }}</div>
+                    <div style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">目前：{{ isHidden ? '••••••' : formatInvestNumber(Math.round(netWorthSummaryText.lastVal)) }}</div>
                   </div>
                 </div>
 
@@ -4998,8 +4998,8 @@ onUnmounted(() => {
                     </div>
                   </div>
                   <div style="font-size: 0.62rem; color: var(--color-text-muted); margin-top: 8px; border-top: 1px dashed rgba(0,0,0,0.04); padding-top: 6px; display: flex; flex-direction: column; gap: 2px;">
-                    <div style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">期初：{{ formatInvestNumber(Math.round(liquidInvestSummaryText.startLiq)) }}</div>
-                    <div style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">目前：{{ formatInvestNumber(Math.round(liquidInvestSummaryText.lastLiq)) }}</div>
+                    <div style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">期初：{{ isHidden ? '••••••' : formatInvestNumber(Math.round(liquidInvestSummaryText.startLiq)) }}</div>
+                    <div style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">目前：{{ isHidden ? '••••••' : formatInvestNumber(Math.round(liquidInvestSummaryText.lastLiq)) }}</div>
                   </div>
                 </div>
 
@@ -5031,8 +5031,8 @@ onUnmounted(() => {
                     </div>
                   </div>
                   <div style="font-size: 0.62rem; color: var(--color-text-muted); margin-top: 8px; border-top: 1px dashed rgba(0,0,0,0.04); padding-top: 6px; display: flex; flex-direction: column; gap: 2px;">
-                    <div style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">期初：{{ formatInvestNumber(Math.round(liquidInvestSummaryText.startInv)) }}</div>
-                    <div style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">目前：{{ formatInvestNumber(Math.round(liquidInvestSummaryText.lastInv)) }}</div>
+                    <div style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">期初：{{ isHidden ? '••••••' : formatInvestNumber(Math.round(liquidInvestSummaryText.startInv)) }}</div>
+                    <div style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">目前：{{ isHidden ? '••••••' : formatInvestNumber(Math.round(liquidInvestSummaryText.lastInv)) }}</div>
                   </div>
                 </div>
               </div>
@@ -6478,7 +6478,7 @@ onUnmounted(() => {
           <!-- Large Balance -->
           <div style="text-align: left; margin-top: 32px; margin-bottom: 32px;">
             <div style="color: var(--color-text); font-size: 2.5rem; font-weight: 800; font-family: var(--font-display); letter-spacing: -0.02em;">
-              {{ formatInvestCurrency(selectedInvestment.value, selectedInvestment.currency) }}
+              {{ isHidden ? '••••••' : formatInvestCurrency(selectedInvestment.value, selectedInvestment.currency) }}
             </div>
           </div>
 
@@ -6503,12 +6503,18 @@ onUnmounted(() => {
               <div v-for="lot in selectedInvestment.lots" :key="lot.id" class="history-item-row" style="display: flex; justify-content: space-between; align-items: flex-start; padding-bottom: 14px; border-bottom: 1px solid rgba(0,0,0,0.04);">
                 <div style="display: flex; flex-direction: column;">
                   <span style="color: var(--color-text); font-size: 0.95rem; font-weight: 700;">{{ lot.remarks || (lot.type === 'DCA' ? '定期定額/定期定投' : '買入持股') }}</span>
-                  <span style="color: var(--color-text-muted); font-size: 0.82rem; margin-top: 4px;">持有 {{ formatInvestNumber(lot.quantity) }}, {{ lot.currency }} {{ formatInvestNumber(lot.buy_price) }}</span>
+                  <span style="color: var(--color-text-muted); font-size: 0.82rem; margin-top: 4px;">
+                    持有 {{ isHidden ? '••••' : formatInvestNumber(lot.quantity) }}, {{ lot.currency }} {{ isHidden ? '••••' : formatInvestNumber(lot.buy_price) }}
+                  </span>
                   <span style="color: var(--color-text-muted); opacity: 0.8; font-size: 0.8rem; margin-top: 4px;">{{ formatDateDetailed(lot.buy_date || lot.created_at) }}</span>
                 </div>
                 <div style="display: flex; flex-direction: column; align-items: flex-end;">
-                  <span style="color: #2ec173; font-size: 0.95rem; font-weight: 700;">{{ formatHistoryValue(lot.quantity * lot.current_price, lot.currency) }}</span>
-                  <span style="color: var(--color-text-muted); font-size: 0.82rem; margin-top: 4px;">現值 {{ formatHistoryValue(lot.quantity * lot.current_price, lot.currency) }}</span>
+                  <span style="color: #2ec173; font-size: 0.95rem; font-weight: 700;">
+                    {{ isHidden ? '••••••' : formatHistoryValue(lot.quantity * lot.current_price, lot.currency) }}
+                  </span>
+                  <span style="color: var(--color-text-muted); font-size: 0.82rem; margin-top: 4px;">
+                    現值 {{ isHidden ? '••••••' : formatHistoryValue(lot.quantity * lot.current_price, lot.currency) }}
+                  </span>
                 </div>
               </div>
             </div>
@@ -7085,10 +7091,10 @@ onUnmounted(() => {
                 <div class="sub-item-info">
                   <div class="sub-item-name">{{ item.name }}</div>
                   <div class="sub-item-desc" style="display: flex; align-items: center; flex-wrap: wrap;">
-                    <span>持有 {{ item.qty }}, {{ item.currency }} {{ item.current_price }}</span>
+                    <span>持有 {{ isHidden ? '••••' : item.qty }}, {{ item.currency }} {{ isHidden ? '••••' : item.current_price }}</span>
                     <!-- Individual Stock ROI inside group -->
                     <span v-if="item.pnlPct !== undefined" :style="{ color: item.pnl >= 0 ? '#2ebd59' : '#ff453a', fontWeight: 'bold', marginLeft: '6px' }">
-                      {{ item.pnl >= 0 ? '+' : '' }}{{ isHidden ? '••••' : Math.round(item.pnl).toLocaleString('zh-TW') }} ({{ item.pnl >= 0 ? '+' : '' }}{{ item.pnlPct.toFixed(2) }}%)
+                      {{ item.pnl >= 0 ? '+' : '' }}{{ isHidden ? '••••' : Math.round(item.pnl).toLocaleString('zh-TW') }} ({{ isHidden ? '••••%' : (item.pnl >= 0 ? '+' : '') + item.pnlPct.toFixed(2) + '%' }})
                     </span>
                   </div>
                 </div>
