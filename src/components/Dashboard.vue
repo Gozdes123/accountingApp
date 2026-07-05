@@ -1700,6 +1700,7 @@ const trendDatasets = computed(() => {
 })
 
 const selectedHistoryIndex = ref(null)
+const trendSubTab = ref('details')
 
 watch(trendDatasets, (newVal) => {
   if (newVal.length > 0) {
@@ -2487,142 +2488,78 @@ watch(trendType, (type) => {
   }
 })
 
-const trendChartData = computed(() => {
+const netWorthChartData = computed(() => {
   const datasets = trendDatasets.value
   const labels = datasets.map(r => {
     const d = new Date(r.date)
     return `${d.getMonth() + 1}月`
   })
-  
-  if (trendType.value === 'net_worth') {
-    const nwData = datasets.map(r => r.netWorth)
-    const liabData = datasets.map(r => r.liabilities)
-    return {
-      labels,
-      datasets: [
-        {
-          label: '我的淨資產',
-          data: nwData,
-          borderColor: '#5c67f5',
-          tension: 0.35,
-          borderWidth: 2.5,
-          fill: false,
-          pointRadius: datasets.length > 20 ? 0 : 2,
-          pointHoverRadius: 5
-        },
-        {
-          label: '負債',
-          data: liabData,
-          borderColor: '#a0a0a5',
-          borderDash: [5, 5],
-          tension: 0.35,
-          borderWidth: 2.5,
-          fill: false,
-          pointRadius: datasets.length > 20 ? 0 : 2,
-          pointHoverRadius: 5
-        }
-      ]
-    }
-  } else if (trendType.value === 'liquid_invest') {
-    const liquidData = datasets.map(r => r.liquid)
-    const investData = datasets.map(r => r.invest)
-    return {
-      labels,
-      datasets: [
-        {
-          label: '流動資金',
-          data: liquidData,
-          borderColor: '#2ec173',
-          tension: 0.35,
-          borderWidth: 2.5,
-          fill: false,
-          pointRadius: datasets.length > 20 ? 0 : 2,
-          pointHoverRadius: 5
-        },
-        {
-          label: '投資',
-          data: investData,
-          borderColor: '#7839ec',
-          tension: 0.35,
-          borderWidth: 2.5,
-          fill: false,
-          pointRadius: datasets.length > 20 ? 0 : 2,
-          pointHoverRadius: 5
-        }
-      ]
-    }
-  } else {
-    // ROI view: Plot each custom investment group dynamically!
-    const first = datasets[0]
-    const firstInvest = first.invest
-    
-    // Overall period ROI trend line
-    const investRoiData = datasets.map(r => firstInvest > 0 ? ((r.invest - firstInvest) / firstInvest) * 100 : 0)
-    const overall_current_ROI = totalInvestmentPnLPct.value
-    
-    // Group metrics
-    const groupMetrics = {}
-    investments.value.forEach(item => {
-      const qty = Number(item.quantity || 0)
-      if (qty <= 0 || item.include_in_chart === false) return
-      const cost = Number(item.buy_price || item.average_cost || 0)
-      const current = Number(item.current_price || 0)
-      const currency = item.currency || 'TWD'
-      const grp = item.custom_group || '未分類'
-      
-      const isUS = currency === 'USD' || (item.asset_class || '').toLowerCase() === 'us_stock'
-      const costTwd = isUS ? qty * cost * usdTwdRate.value : qty * cost
-      const valTwd = isUS ? qty * current * usdTwdRate.value : qty * current
-
-      if (!groupMetrics[grp]) {
-        groupMetrics[grp] = { cost: 0, val: 0 }
+  const nwData = datasets.map(r => r.netWorth)
+  const liabData = datasets.map(r => r.liabilities)
+  return {
+    labels,
+    datasets: [
+      {
+        label: '我的淨資產',
+        data: nwData,
+        borderColor: '#5c67f5',
+        tension: 0.35,
+        borderWidth: 2.5,
+        fill: false,
+        pointRadius: datasets.length > 20 ? 0 : 2,
+        pointHoverRadius: 5
+      },
+      {
+        label: '負債',
+        data: liabData,
+        borderColor: '#a0a0a5',
+        borderDash: [5, 5],
+        tension: 0.35,
+        borderWidth: 2.5,
+        fill: false,
+        pointRadius: datasets.length > 20 ? 0 : 2,
+        pointHoverRadius: 5
       }
-      groupMetrics[grp].cost += costTwd
-      groupMetrics[grp].val += valTwd
-    })
+    ]
+  }
+})
 
-    const datasetsList = []
-
-    for (const [grp, metrics] of Object.entries(groupMetrics)) {
-      if (metrics.cost > 0) {
-        const roi = ((metrics.val - metrics.cost) / metrics.cost) * 100
-        const color = getGroupColor(grp)
-
-        datasetsList.push({
-          label: grp,
-          data: investRoiData.map(val => val * (roi / (overall_current_ROI || 1))),
-          borderColor: color,
-          tension: 0.35,
-          borderWidth: 2.5,
-          fill: false,
-          pointRadius: datasets.length > 20 ? 0 : 2,
-          pointHoverRadius: 5
-        })
-      }
-    }
-
-    if (datasetsList.length === 0) {
-      datasetsList.push({
-        label: '整體投資報酬率',
-        data: investRoiData,
+const liquidInvestChartData = computed(() => {
+  const datasets = trendDatasets.value
+  const labels = datasets.map(r => {
+    const d = new Date(r.date)
+    return `${d.getMonth() + 1}月`
+  })
+  const liquidData = datasets.map(r => r.liquid)
+  const investData = datasets.map(r => r.invest)
+  return {
+    labels,
+    datasets: [
+      {
+        label: '流動資金',
+        data: liquidData,
+        borderColor: '#2ec173',
+        tension: 0.35,
+        borderWidth: 2.5,
+        fill: false,
+        pointRadius: datasets.length > 20 ? 0 : 2,
+        pointHoverRadius: 5
+      },
+      {
+        label: '投資',
+        data: investData,
         borderColor: '#7839ec',
         tension: 0.35,
         borderWidth: 2.5,
         fill: false,
         pointRadius: datasets.length > 20 ? 0 : 2,
         pointHoverRadius: 5
-      })
-    }
-
-    return {
-      labels,
-      datasets: datasetsList
-    }
+      }
+    ]
   }
 })
 
-const trendChartOptions = computed(() => {
-  const isRoi = trendType.value === 'roi'
+const netWorthChartOptions = computed(() => {
   return {
     responsive: true,
     maintainAspectRatio: false,
@@ -2634,18 +2571,7 @@ const trendChartOptions = computed(() => {
     },
     interaction: { mode: 'index', intersect: false },
     plugins: {
-      legend: { 
-        display: isRoi,
-        position: 'top',
-        align: 'center',
-        labels: {
-          color: 'var(--color-text)',
-          font: { size: 10, family: 'Inter', weight: 'bold' },
-          boxWidth: 8,
-          boxHeight: 8,
-          padding: 8
-        }
-      },
+      legend: { display: false },
       tooltip: {
         backgroundColor: 'rgba(30, 30, 32, 0.95)',
         titleColor: '#ffffff',
@@ -2657,34 +2583,19 @@ const trendChartOptions = computed(() => {
         callbacks: {
           label: (context) => {
             let label = context.dataset.label || ''
-            if (label) {
-              label += ': '
-            }
-            if (context.parsed.y !== null) {
-              if (isRoi) {
-                label += (context.parsed.y >= 0 ? '+' : '') + context.parsed.y.toFixed(2) + '%'
-              } else {
-                const valStr = isHidden.value ? '•••••• 元' : context.parsed.y.toLocaleString('zh-TW', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) + ' 元'
-                label += valStr
-                
-                // 計算相較於期初的成長率 (%)
-                const datasets = trendDatasets.value
-                if (datasets.length >= 2) {
-                  let firstVal = 0
-                  if (trendType.value === 'net_worth') {
-                    firstVal = context.datasetIndex === 0 ? datasets[0].netWorth : datasets[0].liabilities
-                  } else if (trendType.value === 'liquid_invest') {
-                    firstVal = context.datasetIndex === 0 ? datasets[0].liquid : datasets[0].invest
-                  }
-                  
-                  if (firstVal && firstVal !== 0) {
-                    const diff = context.parsed.y - firstVal
-                    const pct = (diff / Math.abs(firstVal)) * 100
-                    label += ` (${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%)`
-                  } else if (firstVal === 0 && context.parsed.y !== 0) {
-                    label += ' (+100.00%)'
-                  }
-                }
+            if (label) label += ': '
+            const valStr = isHidden.value ? '•••••• 元' : context.parsed.y.toLocaleString('zh-TW', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) + ' 元'
+            label += valStr
+            
+            const datasets = trendDatasets.value
+            if (datasets.length >= 2) {
+              const firstVal = context.datasetIndex === 0 ? datasets[0].netWorth : datasets[0].liabilities
+              if (firstVal && firstVal !== 0) {
+                const diff = context.parsed.y - firstVal
+                const pct = (diff / Math.abs(firstVal)) * 100
+                label += ` (${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%)`
+              } else if (firstVal === 0 && context.parsed.y !== 0) {
+                label += ' (+100.00%)'
               }
             }
             return label
@@ -2699,18 +2610,75 @@ const trendChartOptions = computed(() => {
           color: 'rgba(255, 255, 255, 0.4)', 
           font: { size: 10, family: 'Inter' },
           callback: (value) => {
-            if (isRoi) {
-              return (value >= 0 ? '+' : '') + value.toFixed(1) + '%'
+            if (isHidden.value) return '***'
+            if (Math.abs(value) >= 1000000) return (value / 1000000) + 'm'
+            if (Math.abs(value) >= 1000) return (value / 1000) + 'k'
+            return value
+          }
+        }
+      },
+      x: {
+        grid: { display: false },
+        ticks: { color: 'rgba(255, 255, 255, 0.4)', font: { size: 10, family: 'Inter' }, maxTicksLimit: 8 }
+      }
+    }
+  }
+})
+
+const liquidInvestChartOptions = computed(() => {
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    onClick: (event, elements) => {
+      if (elements && elements.length > 0) {
+        const index = elements[0].index
+        selectedHistoryIndex.value = index
+      }
+    },
+    interaction: { mode: 'index', intersect: false },
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        backgroundColor: 'rgba(30, 30, 32, 0.95)',
+        titleColor: '#ffffff',
+        bodyColor: '#e0e0e5',
+        borderColor: 'rgba(255, 255, 255, 0.08)',
+        borderWidth: 1,
+        padding: 10,
+        cornerRadius: 8,
+        callbacks: {
+          label: (context) => {
+            let label = context.dataset.label || ''
+            if (label) label += ': '
+            const valStr = isHidden.value ? '•••••• 元' : context.parsed.y.toLocaleString('zh-TW', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) + ' 元'
+            label += valStr
+            
+            const datasets = trendDatasets.value
+            if (datasets.length >= 2) {
+              const firstVal = context.datasetIndex === 0 ? datasets[0].liquid : datasets[0].invest
+              if (firstVal && firstVal !== 0) {
+                const diff = context.parsed.y - firstVal
+                const pct = (diff / Math.abs(firstVal)) * 100
+                label += ` (${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%)`
+              } else if (firstVal === 0 && context.parsed.y !== 0) {
+                label += ' (+100.00%)'
+              }
             }
-            if (isHidden.value) {
-              return '***'
-            }
-            if (Math.abs(value) >= 1000000) {
-              return (value / 1000000) + 'm'
-            }
-            if (Math.abs(value) >= 1000) {
-              return (value / 1000) + 'k'
-            }
+            return label
+          }
+        }
+      }
+    },
+    scales: {
+      y: {
+        grid: { color: 'rgba(255, 255, 255, 0.05)' },
+        ticks: { 
+          color: 'rgba(255, 255, 255, 0.4)', 
+          font: { size: 10, family: 'Inter' },
+          callback: (value) => {
+            if (isHidden.value) return '***'
+            if (Math.abs(value) >= 1000000) return (value / 1000000) + 'm'
+            if (Math.abs(value) >= 1000) return (value / 1000) + 'k'
             return value
           }
         }
@@ -4908,24 +4876,7 @@ onUnmounted(() => {
               boxShadow: trendType === 'net_worth' ? '0 2px 4px rgba(0,0,0,0.05)' : 'none'
             }"
           >
-            淨資產與負債
-          </button>
-          <button 
-            @click="trendType = 'liquid_invest'"
-            :style="{
-              flex: 1,
-              padding: '10px 0',
-              borderRadius: '16px',
-              border: 'none',
-              fontSize: '0.85rem',
-              fontWeight: '700',
-              cursor: 'pointer',
-              background: trendType === 'liquid_invest' ? '#ffffff' : 'transparent',
-              color: trendType === 'liquid_invest' ? 'var(--color-text)' : 'var(--color-text-muted)',
-              boxShadow: trendType === 'liquid_invest' ? '0 2px 4px rgba(0,0,0,0.05)' : 'none'
-            }"
-          >
-            流動資金與投資
+            資產與分配走勢
           </button>
           <button 
             @click="trendType = 'roi'"
@@ -4968,123 +4919,116 @@ onUnmounted(() => {
               <span>{{ trendPeriodROI >= 0 ? '+' : '' }}{{ trendPeriodROI.toFixed(2) }}%</span>
             </div>
           </div>
-          <template v-if="trendType === 'net_worth' && netWorthSummaryText">
+          <template v-if="trendType === 'net_worth' && netWorthSummaryText && liquidInvestSummaryText">
             <div style="display: flex; flex-direction: column; gap: 12px; text-align: left; width: 100%;">
-              <!-- Net Worth Header Card -->
-              <div style="background: rgba(92, 103, 245, 0.03); border: 1px solid rgba(92, 103, 245, 0.1); border-radius: 12px; padding: 12px 16px;">
-                <div style="font-size: 0.72rem; font-weight: 700; color: var(--color-text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">總淨資產變動</div>
-                <div style="display: flex; align-items: baseline; gap: 8px;">
-                  <span style="font-size: 1.15rem; font-weight: 900; color: var(--color-text); font-family: 'Outfit', sans-serif;">
-                    {{ isHidden ? '••••••' : formatInvestNumber(netWorthSummaryText.lastVal - netWorthSummaryText.startVal) }} 元
-                  </span>
-                  <span :style="{ 
-                    color: netWorthSummaryText.diff >= 0 ? 'var(--color-success)' : 'var(--color-danger)', 
-                    fontSize: '0.8rem', 
-                    fontWeight: '800' 
-                  }">
-                    ({{ netWorthSummaryText.diff >= 0 ? '＋' : '－' }}{{ netWorthSummaryText.pct }})
-                  </span>
-                </div>
-                <div style="font-size: 0.72rem; color: var(--color-text-muted); margin-top: 6px; font-weight: 500;">
-                  期初 {{ netWorthSummaryText.startDateStr }}：{{ formatInvestNumber(netWorthSummaryText.startVal) }} 元 ➔ 目前：{{ formatInvestNumber(netWorthSummaryText.lastVal) }} 元
-                </div>
-              </div>
-              
-              <!-- 變動來源 Breakdown (Unified Horizontal Segments) -->
-              <div style="margin-top: 4px; display: flex; flex-direction: column; gap: 6px; width: 100%;">
-                <div style="font-weight: 800; color: var(--color-text-muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.5px; border-left: 2.5px solid var(--color-primary); padding-left: 8px; margin-bottom: 4px;">變動來源分析</div>
-                
-                <div style="
-                  display: flex; 
-                  background: rgba(92, 103, 245, 0.02); 
-                  border: 1px solid rgba(92, 103, 245, 0.08); 
-                  border-radius: 12px; 
-                  padding: 10px 0;
-                  width: 100%;
-                ">
-                  <!-- Segment 1: 流動資金 -->
-                  <div style="flex: 1; padding: 4px 16px; text-align: left; border-right: 1px solid rgba(92, 103, 245, 0.12);">
-                    <div style="font-size: 0.68rem; color: var(--color-text-muted); font-weight: 700; margin-bottom: 4px;">流動資金變動</div>
-                    <div :style="{ color: netWorthSummaryText.liqDiff >= 0 ? 'var(--color-success)' : 'var(--color-danger)', fontSize: '0.82rem', fontWeight: '800', fontFamily: 'Outfit' }">
-                      {{ netWorthSummaryText.liqDiff >= 0 ? '＋' : '' }}{{ formatInvestNumber(netWorthSummaryText.liqDiff) }} 元
-                    </div>
-                  </div>
-                  
-                  <!-- Segment 2: 投資市值 -->
-                  <div style="flex: 1; padding: 4px 16px; text-align: left; border-right: netWorthSummaryText.liabDiff !== 0 ? '1px solid rgba(92, 103, 245, 0.12)' : 'none';">
-                    <div style="font-size: 0.68rem; color: var(--color-text-muted); font-weight: 700; margin-bottom: 4px;">投資市值變動</div>
-                    <div :style="{ color: netWorthSummaryText.invDiff >= 0 ? 'var(--color-success)' : 'var(--color-danger)', fontSize: '0.82rem', fontWeight: '800', fontFamily: 'Outfit' }">
-                      {{ netWorthSummaryText.invDiff >= 0 ? '＋' : '' }}{{ formatInvestNumber(netWorthSummaryText.invDiff) }} 元
-                    </div>
-                  </div>
-                  
-                  <!-- Segment 3: 負債與其他 (Conditional) -->
-                  <div v-if="netWorthSummaryText.liabDiff !== 0" style="flex: 1; padding: 4px 16px; text-align: left;">
-                    <div style="font-size: 0.68rem; color: var(--color-text-muted); font-weight: 700; margin-bottom: 4px;">負債與固定資產</div>
-                    <div :style="{ color: netWorthSummaryText.liabDiff <= 0 ? 'var(--color-success)' : 'var(--color-danger)', fontSize: '0.82rem', fontWeight: '800', fontFamily: 'Outfit' }">
-                      {{ netWorthSummaryText.liabDiff > 0 ? '＋' : '' }}{{ formatInvestNumber(netWorthSummaryText.liabDiff) }} 元
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </template>
-          <template v-else-if="trendType === 'liquid_invest' && liquidInvestSummaryText">
-            <div style="display: flex; flex-direction: column; gap: 12px; text-align: left; width: 100%;">
-              
-              <!-- Unified Horizontal Segments Panel -->
+              <!-- 3-Column Summary Panel -->
               <div style="
-                display: flex; 
-                background: rgba(92, 103, 245, 0.02); 
-                border: 1px solid rgba(92, 103, 245, 0.08); 
-                border-radius: 16px; 
-                padding: 16px 0;
+                display: grid; 
+                grid-template-columns: repeat(3, 1fr); 
+                gap: 12px; 
                 width: 100%;
               ">
-                
-                <!-- Segment 1: 流動資金 -->
-                <div style="flex: 1; padding: 0 20px; text-align: left; border-right: 1px solid rgba(92, 103, 245, 0.12); display: flex; flex-direction: column; justify-content: space-between;">
+                <!-- Net Worth Column -->
+                <div style="
+                  background: var(--color-card-bg); 
+                  border: 1px solid var(--color-card-border); 
+                  border-radius: 12px; 
+                  padding: 12px;
+                  display: flex;
+                  flex-direction: column;
+                  justify-content: space-between;
+                  box-shadow: 0 2px 6px rgba(0,0,0,0.01);
+                ">
                   <div>
-                    <div style="font-size: 0.7rem; font-weight: 800; color: var(--color-text-muted); border-left: 2.5px solid var(--color-primary); padding-left: 6px; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.3px;">流動資金</div>
-                    <div :style="{ color: liquidInvestSummaryText.liqDiff >= 0 ? 'var(--color-success)' : 'var(--color-danger)', fontSize: '1.05rem', fontWeight: '900', fontFamily: 'Outfit, sans-serif' }">
-                      {{ liquidInvestSummaryText.liqDiff >= 0 ? '＋' : '' }}{{ formatInvestNumber(liquidInvestSummaryText.liqDiff) }} 元
+                    <div style="font-size: 0.72rem; font-weight: 800; color: var(--color-text-muted); margin-bottom: 6px; border-left: 2px solid var(--color-primary); padding-left: 6px;">總淨資產變動</div>
+                    <div style="display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px;">
+                      <span style="font-size: 0.95rem; font-weight: 900; color: var(--color-text); font-family: 'Outfit', sans-serif;">
+                        {{ isHidden ? '••••••' : formatInvestNumber(netWorthSummaryText.lastVal - netWorthSummaryText.startVal) }} 元
+                      </span>
                     </div>
-                    <div style="font-size: 0.68rem; color: var(--color-text-muted); font-weight: 600; margin-top: 2px;">
-                      成長率：{{ liquidInvestSummaryText.liqPct }}
+                    <div :style="{ 
+                      color: netWorthSummaryText.diff >= 0 ? 'var(--color-success)' : 'var(--color-danger)', 
+                      fontSize: '0.75rem', 
+                      fontWeight: '800',
+                      marginTop: '2px'
+                    }">
+                      {{ netWorthSummaryText.diff >= 0 ? '＋' : '－' }}{{ netWorthSummaryText.pct }}
                     </div>
                   </div>
-                  <div style="margin-top: 10px; font-size: 0.65rem; color: var(--color-text-muted); border-top: 1px dashed rgba(0,0,0,0.06); padding-top: 6px; display: flex; flex-direction: column; gap: 1px;">
-                    <div>期初：{{ formatInvestNumber(Math.round(liquidInvestSummaryText.startLiq)) }} 元</div>
-                    <div>目前：{{ formatInvestNumber(Math.round(liquidInvestSummaryText.lastLiq)) }} 元</div>
+                  <div style="font-size: 0.65rem; color: var(--color-text-muted); margin-top: 8px; border-top: 1px dashed rgba(0,0,0,0.04); padding-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                    期初：{{ formatInvestNumber(netWorthSummaryText.startVal) }} ➔ 目前：{{ formatInvestNumber(netWorthSummaryText.lastVal) }}
                   </div>
                 </div>
 
-                <!-- Segment 2: 投資市值 -->
-                <div style="flex: 1; padding: 0 20px; text-align: left; display: flex; flex-direction: column; justify-content: space-between;">
+                <!-- Liquid Assets Column -->
+                <div style="
+                  background: var(--color-card-bg); 
+                  border: 1px solid var(--color-card-border); 
+                  border-radius: 12px; 
+                  padding: 12px;
+                  display: flex;
+                  flex-direction: column;
+                  justify-content: space-between;
+                  box-shadow: 0 2px 6px rgba(0,0,0,0.01);
+                ">
                   <div>
-                    <div style="font-size: 0.7rem; font-weight: 800; color: var(--color-text-muted); border-left: 2.5px solid #a855f7; padding-left: 6px; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.3px;">投資市值</div>
-                    <div :style="{ color: liquidInvestSummaryText.invDiff >= 0 ? 'var(--color-success)' : 'var(--color-danger)', fontSize: '1.05rem', fontWeight: '900', fontFamily: 'Outfit, sans-serif' }">
-                      {{ liquidInvestSummaryText.invDiff >= 0 ? '＋' : '' }}{{ formatInvestNumber(liquidInvestSummaryText.invDiff) }} 元
+                    <div style="font-size: 0.72rem; font-weight: 800; color: var(--color-text-muted); margin-bottom: 6px; border-left: 2px solid #2ec173; padding-left: 6px;">流動資金變動</div>
+                    <div style="display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px;">
+                      <span style="font-size: 0.95rem; font-weight: 900; color: var(--color-text); font-family: 'Outfit', sans-serif;">
+                        {{ isHidden ? '••••••' : formatInvestNumber(liquidInvestSummaryText.liqDiff) }} 元
+                      </span>
                     </div>
-                    <div style="font-size: 0.7rem; color: var(--color-text-muted); font-weight: 600; margin-top: 2px;">
-                      成長率：{{ liquidInvestSummaryText.invPct }}
+                    <div :style="{ 
+                      color: liquidInvestSummaryText.liqDiff >= 0 ? 'var(--color-success)' : 'var(--color-danger)', 
+                      fontSize: '0.75rem', 
+                      fontWeight: '800',
+                      marginTop: '2px'
+                    }">
+                      {{ liquidInvestSummaryText.liqDiff >= 0 ? '＋' : '' }}{{ liquidInvestSummaryText.liqPct }}
                     </div>
                   </div>
-                  <div style="margin-top: 10px; font-size: 0.65rem; color: var(--color-text-muted); border-top: 1px dashed rgba(0,0,0,0.06); padding-top: 6px; display: flex; flex-direction: column; gap: 1px;">
-                    <div>期初：{{ formatInvestNumber(Math.round(liquidInvestSummaryText.startInv)) }} 元</div>
-                    <div>目前：{{ formatInvestNumber(Math.round(liquidInvestSummaryText.lastInv)) }} 元</div>
+                  <div style="font-size: 0.65rem; color: var(--color-text-muted); margin-top: 8px; border-top: 1px dashed rgba(0,0,0,0.04); padding-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                    期初：{{ formatInvestNumber(Math.round(liquidInvestSummaryText.startLiq)) }} ➔ 目前：{{ formatInvestNumber(Math.round(liquidInvestSummaryText.lastLiq)) }}
                   </div>
                 </div>
 
+                <!-- Investment Column -->
+                <div style="
+                  background: var(--color-card-bg); 
+                  border: 1px solid var(--color-card-border); 
+                  border-radius: 12px; 
+                  padding: 12px;
+                  display: flex;
+                  flex-direction: column;
+                  justify-content: space-between;
+                  box-shadow: 0 2px 6px rgba(0,0,0,0.01);
+                ">
+                  <div>
+                    <div style="font-size: 0.72rem; font-weight: 800; color: var(--color-text-muted); margin-bottom: 6px; border-left: 2px solid #7839ec; padding-left: 6px;">投資市值變動</div>
+                    <div style="display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px;">
+                      <span style="font-size: 0.95rem; font-weight: 900; color: var(--color-text); font-family: 'Outfit', sans-serif;">
+                        {{ isHidden ? '••••••' : formatInvestNumber(liquidInvestSummaryText.invDiff) }} 元
+                      </span>
+                    </div>
+                    <div :style="{ 
+                      color: liquidInvestSummaryText.invDiff >= 0 ? 'var(--color-success)' : 'var(--color-danger)', 
+                      fontSize: '0.75rem', 
+                      fontWeight: '800',
+                      marginTop: '2px'
+                    }">
+                      {{ liquidInvestSummaryText.invDiff >= 0 ? '＋' : '' }}{{ liquidInvestSummaryText.invPct }}
+                    </div>
+                  </div>
+                  <div style="font-size: 0.65rem; color: var(--color-text-muted); margin-top: 8px; border-top: 1px dashed rgba(0,0,0,0.04); padding-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                    期初：{{ formatInvestNumber(Math.round(liquidInvestSummaryText.startInv)) }} ➔ 目前：{{ formatInvestNumber(Math.round(liquidInvestSummaryText.lastInv)) }}
+                  </div>
+                </div>
               </div>
-              
             </div>
           </template>
-
           <template v-else>
             <!-- Premium horizontal scrollable chip row -->
             <div style="display: flex; gap: 8px; overflow-x: auto; padding: 2px 0 4px; -webkit-overflow-scrolling: touch; scrollbar-width: none; -ms-overflow-style: none;">
-
               <!-- 整體 chip — indigo gradient glass -->
               <div 
                 @mouseenter="hoveredGroup = 'overall'"
@@ -5167,42 +5111,68 @@ onUnmounted(() => {
                   {{ metrics.roi >= 0 ? '+' : '' }}{{ metrics.roi.toFixed(2) }}%
                 </span>
               </div>
-
             </div>
-          </template>
-        </div>
-
-        <!-- Legend -->
-        <div style="display: flex; gap: 12px 24px; align-items: center; margin-bottom: 24px; padding-left: 12px; flex-wrap: wrap;">
-          <template v-if="trendType === 'net_worth'">
-            <div style="display: flex; align-items: center; gap: 6px; font-size: 0.82rem; font-weight: bold; color: var(--color-text);">
-              <span style="display: inline-block; width: 12px; height: 12px; background: #5c67f5; border-radius: 2px;"></span>
-              我的淨資產
-            </div>
-            <div style="display: flex; align-items: center; gap: 6px; font-size: 0.82rem; font-weight: bold; color: var(--color-text);">
-              <span style="display: inline-flex; width: 12px; height: 12px; border: 1.5px dashed #a0a0a5; box-sizing: border-box; border-radius: 2px;"></span>
-              負債
-            </div>
-          </template>
-          <template v-else-if="trendType === 'liquid_invest'">
-            <div style="display: flex; align-items: center; gap: 6px; font-size: 0.82rem; font-weight: bold; color: var(--color-text);">
-              <span style="display: inline-block; width: 12px; height: 12px; background: #2ec173; border-radius: 2px;"></span>
-              流動資金
-            </div>
-            <div style="display: flex; align-items: center; gap: 6px; font-size: 0.82rem; font-weight: bold; color: var(--color-text);">
-              <span style="display: inline-block; width: 12px; height: 12px; background: #7839ec; border-radius: 2px;"></span>
-              投資
-            </div>
-          </template>
-          <template v-else>
-            <!-- Native interactive legend is displayed inside chart container -->
           </template>
         </div>
 
         <!-- Line Chart Container -->
-        <template v-if="trendType !== 'roi'">
-          <div style="height: 260px; position: relative; margin-bottom: 32px;">
-            <Line :data="trendChartData" :options="trendChartOptions" />
+        <template v-if="trendType === 'net_worth'">
+          <!-- Dual Chart Panel -->
+          <div style="
+            background: var(--color-card-bg); 
+            border: 1px solid var(--color-card-border); 
+            border-radius: 16px; 
+            padding: 16px; 
+            margin-bottom: 24px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.01);
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+          ">
+            <!-- Chart 1: Net Worth & Liabilities -->
+            <div>
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <span style="font-size: 0.82rem; font-weight: 800; color: var(--color-text); border-left: 3px solid var(--color-primary); padding-left: 8px;">淨資產與負債走勢</span>
+                <!-- Mini Legend -->
+                <div style="display: flex; gap: 12px; font-size: 0.72rem; color: var(--color-text-muted);">
+                  <div style="display: flex; align-items: center; gap: 4px;">
+                    <span style="width: 8px; height: 8px; background: #5c67f5; border-radius: 50%;"></span>
+                    淨資產
+                  </div>
+                  <div style="display: flex; align-items: center; gap: 4px;">
+                    <span style="width: 8px; height: 8px; background: #a0a0a5; border-radius: 50%;"></span>
+                    負債
+                  </div>
+                </div>
+              </div>
+              <div style="height: 200px; position: relative;">
+                <Line :data="netWorthChartData" :options="netWorthChartOptions" />
+              </div>
+            </div>
+
+            <!-- Dashed Divider -->
+            <div style="border-top: 1px dashed var(--color-card-border); margin: 4px 0;"></div>
+
+            <!-- Chart 2: Liquid Cash & Investments -->
+            <div>
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <span style="font-size: 0.82rem; font-weight: 800; color: var(--color-text); border-left: 3px solid #2ec173; padding-left: 8px;">流動資金與投資走勢</span>
+                <!-- Mini Legend -->
+                <div style="display: flex; gap: 12px; font-size: 0.72rem; color: var(--color-text-muted);">
+                  <div style="display: flex; align-items: center; gap: 4px;">
+                    <span style="width: 8px; height: 8px; background: #2ec173; border-radius: 50%;"></span>
+                    流動資金
+                  </div>
+                  <div style="display: flex; align-items: center; gap: 4px;">
+                    <span style="width: 8px; height: 8px; background: #7839ec; border-radius: 50%;"></span>
+                    投資
+                  </div>
+                </div>
+              </div>
+              <div style="height: 200px; position: relative;">
+                <Line :data="liquidInvestChartData" :options="liquidInvestChartOptions" />
+              </div>
+            </div>
           </div>
         </template>
 
@@ -5230,24 +5200,60 @@ onUnmounted(() => {
           </div>
         </template>
 
-        <!-- Interactive Node Details (Premium Redesign) -->
-        <div v-if="selectedHistoryDetails && trendType !== 'roi'" 
+        <!-- Bottom Section Sub-Tabs (Clean Text Links with Underline style) -->
+        <div v-if="trendType !== 'roi'" style="display: flex; gap: 24px; border-bottom: 1px solid var(--color-card-border); margin-top: 8px; margin-bottom: 20px; padding: 0 4px;">
+          <button 
+            @click="trendSubTab = 'details'"
+            :style="{
+              background: 'transparent',
+              border: 'none',
+              padding: '10px 0',
+              fontSize: '0.85rem',
+              fontWeight: '700',
+              cursor: 'pointer',
+              color: trendSubTab === 'details' ? 'var(--color-primary)' : 'var(--color-text-muted)',
+              borderBottom: trendSubTab === 'details' ? '2px solid var(--color-primary)' : '2px solid transparent',
+              transition: 'all 0.2s ease',
+              marginBottom: '-1px'
+            }"
+          >
+            當日變動明細
+          </button>
+          <button 
+            @click="trendSubTab = 'flow'"
+            :style="{
+              background: 'transparent',
+              border: 'none',
+              padding: '10px 0',
+              fontSize: '0.85rem',
+              fontWeight: '700',
+              cursor: 'pointer',
+              color: trendSubTab === 'flow' ? 'var(--color-primary)' : 'var(--color-text-muted)',
+              borderBottom: trendSubTab === 'flow' ? '2px solid var(--color-primary)' : '2px solid transparent',
+              transition: 'all 0.2s ease',
+              marginBottom: '-1px'
+            }"
+          >
+            期間資金流向分析
+          </button>
+        </div>
+
+        <!-- Interactive Node Details (Premium Clean Style) -->
+        <div v-if="trendSubTab === 'details' && selectedHistoryDetails && trendType !== 'roi'" 
              style="
-               background: linear-gradient(135deg, rgba(92, 103, 245, 0.04) 0%, rgba(92, 103, 245, 0.01) 100%), var(--color-card-bg);
-               border: 1px solid rgba(92, 103, 245, 0.15);
-               border-radius: 20px;
-               padding: 20px;
+               background: var(--color-card-bg);
+               border: 1px solid var(--color-card-border);
+               border-radius: 16px;
+               padding: 16px;
                margin-bottom: 24px;
                text-align: left;
-               box-shadow: 0 12px 30px rgba(0, 0, 0, 0.03), inset 0 1px 0 rgba(255, 255, 255, 0.6);
-               backdrop-filter: blur(10px);
+               box-shadow: 0 4px 12px rgba(0, 0, 0, 0.02);
                transition: all 0.3s ease;
              "
         >
           <!-- Header Row -->
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; border-bottom: 1px solid rgba(92, 103, 245, 0.08); padding-bottom: 12px;">
             <div style="display: flex; align-items: center; gap: 8px;">
-              <span style="font-size: 1.1rem; display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 8px; background: rgba(92, 103, 245, 0.08); color: var(--color-primary);">🔍</span>
               <span style="font-size: 0.9rem; font-weight: 800; color: var(--color-text); letter-spacing: 0.3px;">{{ selectedHistoryDetails.date }} 淨值變動明細</span>
             </div>
             <span style="font-size: 0.72rem; color: var(--color-text-muted); font-weight: 500; opacity: 0.8;">（點擊圖表節點切換）</span>
@@ -5445,47 +5451,32 @@ onUnmounted(() => {
                    border: 1px solid rgba(92, 103, 245, 0.08);
                  "
             >
-              <span style="font-size: 0.9rem;">⚡</span>
+              <span style="display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--color-primary); flex-shrink: 0;"></span>
               <span>{{ tx.type === 'buy' ? '買入' : '賣出' }} {{ tx.symbol }} {{ tx.quantity }} 股 (價格: {{ tx.currency }} {{ tx.price || tx.buy_price }})</span>
             </div>
           </div>
         </div>
 
-        <!-- Smart Money Flow Analysis Card -->
+        <!-- Smart Money Flow Analysis Card (Neutral Theme Style, No Icons) -->
         <div 
-          v-if="trendType === 'liquid_invest' && moneyFlowAnalysis"
+          v-if="trendSubTab === 'flow' && trendType === 'net_worth' && moneyFlowAnalysis"
           style="
-            background: linear-gradient(135deg, rgba(92, 103, 245, 0.04) 0%, rgba(92, 103, 245, 0.01) 100%);
-            border: 1px solid rgba(92, 103, 245, 0.12);
+            background: var(--color-card-bg);
+            border: 1px solid var(--color-card-border);
             border-radius: 16px;
             padding: 16px;
             margin-bottom: 24px;
             text-align: left;
-            box-shadow: 0 4px 12px rgba(92, 103, 245, 0.02);
-            backdrop-filter: blur(8px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.02);
           "
         >
           <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
-            <div style="display: flex; align-items: center; gap: 8px;">
-              <div style="width: 28px; height: 28px; border-radius: 8px; background: rgba(92, 103, 245, 0.08); display: flex; align-items: center; justify-content: center; color: var(--color-primary);">
-                <component 
-                  :is="
-                    moneyFlowAnalysis.type === 'growth' ? PhCoins :
-                    moneyFlowAnalysis.type === 'outflow' ? PhMinusCircle :
-                    moneyFlowAnalysis.type === 'cashout' ? PhBank : PhTrendUp
-                  " 
-                  size="16" 
-                  weight="bold" 
-                />
-              </div>
-              <span style="font-size: 0.88rem; font-weight: 700; color: var(--color-text);">{{ moneyFlowAnalysis.title }}</span>
-            </div>
+            <span style="font-size: 0.88rem; font-weight: 700; color: var(--color-text);">{{ moneyFlowAnalysis.title }}</span>
             <button 
               @click="showFlowAnalysisModal = true"
-              style="background: rgba(92, 103, 245, 0.08); border: none; border-radius: 8px; padding: 6px 12px; display: flex; align-items: center; gap: 6px; color: #5c67f5; cursor: pointer; font-size: 0.78rem; font-weight: 700; transition: all 0.2s; outline: none;"
+              style="background: rgba(92, 103, 245, 0.08); border: none; border-radius: 8px; padding: 6px 12px; color: #5c67f5; cursor: pointer; font-size: 0.78rem; font-weight: 700; transition: all 0.2s; outline: none;"
             >
-              <span>明細</span>
-              <PhInfo size="14" weight="bold" />
+              明細
             </button>
           </div>
           <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 12px;">
@@ -5493,7 +5484,7 @@ onUnmounted(() => {
               {{ moneyFlowAnalysis.summary }}
             </p>
             <div v-if="moneyFlowAnalysis.tradeProfitText" style="display: flex; align-items: center; gap: 6px; font-size: 0.78rem; color: var(--color-primary); font-weight: 600;">
-              <span style="opacity: 0.6;">•</span>
+              <span style="display: inline-block; width: 4px; height: 4px; border-radius: 50%; background: var(--color-primary);"></span>
               <span>{{ moneyFlowAnalysis.tradeProfitText.replace('（', '').replace('）', '') }}</span>
             </div>
           </div>
