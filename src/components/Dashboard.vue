@@ -7094,7 +7094,7 @@ onUnmounted(() => {
                     <span>持有 {{ isHidden ? '••••' : item.qty }}, {{ item.currency }} {{ isHidden ? '••••' : item.current_price }}</span>
                     <!-- Individual Stock ROI inside group -->
                     <span v-if="item.pnlPct !== undefined" :style="{ color: item.pnl >= 0 ? '#2ebd59' : '#ff453a', fontWeight: 'bold', marginLeft: '6px' }">
-                      {{ item.pnl >= 0 ? '+' : '' }}{{ isHidden ? '••••' : Math.round(item.pnl).toLocaleString('zh-TW') }} ({{ isHidden ? '••••%' : (item.pnl >= 0 ? '+' : '') + item.pnlPct.toFixed(2) + '%' }})
+                      {{ item.pnl >= 0 ? '+' : '' }}{{ isHidden ? '••••' : Math.round(item.pnl).toLocaleString('zh-TW') }} ({{ item.pnl >= 0 ? '+' : '' }}{{ item.pnlPct.toFixed(2) }}%)
                     </span>
                   </div>
                 </div>
