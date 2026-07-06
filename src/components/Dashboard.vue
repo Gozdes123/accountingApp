@@ -8213,22 +8213,30 @@ onUnmounted(() => {
   left: 50%;
   transform: translateX(-50%);
   z-index: 3000;
-  background: rgba(255, 255, 255, 0.95);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  border: 1px solid rgba(0, 0, 0, 0.06);
+  background: rgba(255, 255, 255, 0.96);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(0, 0, 0, 0.08);
   color: var(--color-text);
-  padding: 12px 24px;
-  border-radius: 50px;
-  box-shadow: var(--shadow-lg);
+  padding: 14px 20px;
+  border-radius: 16px;
+  box-shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.12), 0 4px 12px -2px rgba(0, 0, 0, 0.06);
   display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 0.9rem;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 0.88rem;
   font-weight: 600;
-  max-width: 90%;
-  text-align: center;
-  animation: slideDown 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  line-height: 1.45;
+  max-width: 360px;
+  width: calc(100% - 32px);
+  box-sizing: border-box;
+  text-align: left;
+  animation: slideDown 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.app-toast svg {
+  flex-shrink: 0;
+  margin-top: 2px;
 }
 
 @keyframes slideDown {
