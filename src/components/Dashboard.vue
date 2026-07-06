@@ -9,7 +9,8 @@ import {
   PhArrowDownLeft, PhBank, PhCoins, PhCalendar, PhArrowClockwise, PhCaretLeft, PhCaretRight,
   PhHouse, PhCar, PhLock, PhUsers, PhCreditCard,
   PhCloudArrowUp, PhCards, PhCurrencyCny, PhChartBar, PhCurrencyBtc, PhLeaf, PhBuildings, PhCube,
-  PhCheck, PhAppleLogo, PhWechatLogo, PhBookOpen, PhUser, PhCheckCircle, PhInfo, PhMinusCircle, PhQrCode, PhCaretDown, PhCaretUp
+  PhCheck, PhAppleLogo, PhWechatLogo, PhBookOpen, PhUser, PhCheckCircle, PhInfo, PhMinusCircle, PhQrCode, PhCaretDown, PhCaretUp,
+  PhArrowDown, PhSpinner
 } from '@phosphor-icons/vue'
 
 ChartJS.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement, Title, Filler, BarElement)
@@ -338,6 +339,81 @@ const isRefreshing = ref(false)
 const isSyncingData = ref(false)
 const verifyingSymbol = ref(false)
 const verificationResult = ref(null)
+
+// 下拉重新整理 (Pull-to-Refresh) 狀態與手勢事件
+const listScrollContainer = ref(null)
+const pullDistance = ref(0)
+const isPulling = ref(false)
+let touchStartY = 0
+let pullStartScrollTop = 0
+
+const handleTouchStart = (e) => {
+  if (isRefreshing.value || isSyncingData.value) return
+  const container = listScrollContainer.value
+  if (!container) return
+  
+  pullStartScrollTop = container.scrollTop
+  if (pullStartScrollTop <= 0) {
+    touchStartY = e.touches[0].clientY
+    isPulling.value = true
+  }
+}
+
+const handleTouchMove = (e) => {
+  if (!isPulling.value || isRefreshing.value || isSyncingData.value) return
+  const container = listScrollContainer.value
+  if (!container) return
+  
+  const currentY = e.touches[0].clientY
+  const diffY = currentY - touchStartY
+  
+  if (diffY > 0 && container.scrollTop <= 0) {
+    const resistance = 0.45
+    pullDistance.value = Math.min(80, diffY * resistance)
+    if (e.cancelable) {
+      e.preventDefault()
+    }
+  } else {
+    pullDistance.value = 0
+    isPulling.value = false
+  }
+}
+
+const handleTouchEnd = async () => {
+  if (!isPulling.value) return
+  isPulling.value = false
+  
+  if (pullDistance.value >= 60) {
+    pullDistance.value = 50
+    try {
+      await handleSyncAll()
+    } catch (err) {
+      console.error(err)
+    } finally {
+      pullDistance.value = 0
+    }
+  } else {
+    pullDistance.value = 0
+  }
+}
+
+// PC 滑鼠拖曳重新整理 (Mouse Drag-to-Refresh) 支援
+const handleMouseDown = (e) => {
+  handleTouchStart({ touches: [{ clientY: e.clientY }] })
+}
+
+const handleMouseMove = (e) => {
+  const fakeEvent = {
+    touches: [{ clientY: e.clientY }],
+    cancelable: e.cancelable,
+    preventDefault: () => { if (e.cancelable) e.preventDefault() }
+  }
+  handleTouchMove(fakeEvent)
+}
+
+const handleMouseUp = () => {
+  handleTouchEnd()
+}
 
 // 複數自動記帳狀態
 const newAssetAutoRecords = ref([])
@@ -4408,7 +4484,70 @@ onUnmounted(() => {
 
     <Transition name="fade-tab" mode="out-in">
       <!-- ── 1. 資產清單視圖 (List Tab) ────────────────────────────────── -->
-      <div v-if="currentTab === 'list'" key="list" class="tab-view-content" :style="{ backgroundColor: 'var(--color-bg)', padding: isTreeView ? '1.5rem 1.25rem' : '1.5rem 1.25rem 120px 1.25rem' }">
+      <div 
+        v-if="currentTab === 'list'" 
+        key="list" 
+        ref="listScrollContainer"
+        class="tab-view-content" 
+        :style="{ backgroundColor: 'var(--color-bg)', padding: isTreeView ? '1.5rem 1.25rem' : '1.5rem 1.25rem 120px 1.25rem' }"
+        @touchstart="handleTouchStart"
+        @touchmove="handleTouchMove"
+        @touchend="handleTouchEnd"
+        @mousedown="handleMouseDown"
+        @mousemove="handleMouseMove"
+        @mouseup="handleMouseUp"
+        @mouseleave="handleMouseUp"
+      >
+        <!-- Pull-to-Refresh Indicator -->
+        <div 
+          class="pull-to-refresh-indicator"
+          :style="{ 
+            height: pullDistance + 'px', 
+            opacity: pullDistance > 0 ? Math.min(1, pullDistance / 50) : 0,
+            overflow: 'hidden',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            transition: isPulling ? 'none' : 'height 0.3s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.3s ease',
+            flexShrink: 0
+          }"
+        >
+          <div 
+            style="
+              background: rgba(0, 0, 0, 0.02); 
+              border: 1px solid rgba(15, 23, 42, 0.12); 
+              padding: 5px 12px; 
+              border-radius: 6px; 
+              display: flex; 
+              align-items: center; 
+              gap: 6px; 
+              color: var(--color-text);
+              font-size: 0.75rem;
+              font-weight: 700;
+              font-family: var(--font-family);
+              letter-spacing: 0.06em;
+            "
+          >
+            <PhArrowDown 
+              size="13" 
+              :style="{ 
+                transform: `rotate(${pullDistance >= 60 ? 180 : 0}deg)`, 
+                transition: 'transform 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
+                display: (isSyncingData || isRefreshing) ? 'none' : 'block',
+                color: 'var(--color-text)'
+              }" 
+            />
+            <PhSpinner 
+              size="13" 
+              class="spin" 
+              :style="{ 
+                display: (isSyncingData || isRefreshing) ? 'block' : 'none',
+                color: 'var(--color-text)'
+              }" 
+            />
+            <span>{{ (isSyncingData || isRefreshing) ? '更新中...' : (pullDistance >= 60 ? '釋放即可更新' : '下拉重新整理') }}</span>
+          </div>
+        </div>
       
       <!-- Case 1: Tree View -->
       <template v-if="isTreeView">
@@ -4472,10 +4611,6 @@ onUnmounted(() => {
           <div class="balance-row">
             <span class="balance-amount">{{ isHidden ? '••••••' : formatCurrency(netWorth).replace('$', '') }}</span>
             <div style="display: flex; gap: 10px; align-items: center;">
-              <!-- Manual database sync button -->
-              <button class="nav-back-circle" @click="handleSyncAll" :disabled="isSyncingData || isRefreshing" title="手動同步" style="background: rgba(0,0,0,0.03); color: var(--color-text); width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; border: none; cursor: pointer; border-radius: 50%;">
-                <PhArrowClockwise size="20" :class="{ spin: isSyncingData || isRefreshing }" weight="bold" />
-              </button>
               <!-- Circle button with > caret to switch to tree view -->
               <button class="nav-back-circle" @click="isTreeView = true" title="查看資產分配比" style="background: rgba(0,0,0,0.03); color: var(--color-text); width: 36px; height: 36px;">
                 <PhCaretRight size="20" weight="bold" />
