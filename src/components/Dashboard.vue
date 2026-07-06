@@ -3306,26 +3306,25 @@ const refreshPrices = async () => {
         const info = yahooToLocalMap[yhSym]
         if (!info) continue
 
-        for (const id of info.ids) {
-          // Queue Supabase update
-          dbUpdates.push(
-            supabase
-              .from('investments')
-              .update({ current_price: price, price_updated_at: now })
-              .eq('id', id)
-          )
+        // 優化：直接以股票代號 (Symbol) 批次更新所有持有批次 (Lots)，不再逐筆 ID 更新
+        dbUpdates.push(
+          supabase
+            .from('investments')
+            .update({ current_price: price, price_updated_at: now })
+            .eq('symbol', info.localSym)
+        )
 
-          // Update local reactive state immediately
-          const item = investments.value.find(i => i.id === id)
-          if (item) {
+        // 同步更新本地所有對應標的的持倉狀態
+        investments.value.forEach(item => {
+          if (item.symbol && item.symbol.toUpperCase() === info.localSym.toUpperCase()) {
             item.current_price = price
             item.price_updated_at = now
           }
-        }
+        })
       }
     }
 
-    // Run Supabase updates concurrently
+    // Run Supabase updates concurrently (此時請求數量等於「獨特股票代號數」，大幅縮減)
     if (dbUpdates.length > 0) {
       await Promise.allSettled(dbUpdates)
     }
