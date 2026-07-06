@@ -618,7 +618,7 @@ const openAddAutoRecord = () => {
     target_account_id: null,
     interest_rate: '',
     symbol: '',
-    currency: 'TWD',
+    currency: newAsset.value.currency || 'TWD',
     created_at: new Date().toISOString()
   }
   activeAutoRecordIndex.value = null
@@ -628,6 +628,9 @@ const openAddAutoRecord = () => {
 const openEditAutoRecord = (idx) => {
   saveError.value = ''
   activeAutoRecord.value = JSON.parse(JSON.stringify(newAssetAutoRecords.value[idx]))
+  if (!activeAutoRecord.value.currency) {
+    activeAutoRecord.value.currency = newAsset.value.currency || 'TWD'
+  }
   activeAutoRecordIndex.value = idx
   addModalStep.value = 3
 }
@@ -6356,6 +6359,22 @@ onUnmounted(() => {
                 <option value="USD">USD (美金)</option>
               </select>
             </div>
+
+            <!-- Currency Selector (For other Auto Record types) -->
+            <div v-else class="form-item-row" style="position: relative;">
+              <span class="row-label">記帳幣別</span>
+              <div class="row-value-wrapper">
+                <span class="display-val" style="color: var(--color-text); font-size: 0.95rem; font-weight: 700;">
+                  {{ activeAutoRecord.currency || 'TWD' }}
+                </span>
+                <PhCaretRight size="16" class="chevron-icon" />
+              </div>
+              <select v-model="activeAutoRecord.currency" class="invisible-select">
+                <option value="TWD">TWD (新台幣)</option>
+                <option value="USD">USD (美金)</option>
+                <option value="JPY">JPY (日幣)</option>
+              </select>
+            </div>
             
             <!-- Symbol Input (Only for DCA Investment type) -->
             <div v-if="activeAutoRecord.type === 'dca_invest'" class="form-item-row">
@@ -6500,7 +6519,7 @@ onUnmounted(() => {
 
             <!-- List of Lots -->
             <div style="display: flex; flex-direction: column; gap: 14px;">
-              <div v-for="lot in selectedInvestment.lots" :key="lot.id" class="history-item-row" style="display: flex; justify-content: space-between; align-items: flex-start; padding-bottom: 14px; border-bottom: 1px solid rgba(0,0,0,0.04);">
+              <div v-for="lot in selectedInvestment.lots" :key="lot.id" class="history-item-row" style="display: flex; justify-content: space-between; align-items: flex-start; padding-bottom: 14px; border-bottom: 1px solid rgba(0,0,0,0.04); cursor: pointer; transition: opacity 0.2s;" @click="editInvestment(lot)" onmouseover="this.style.opacity='0.75'" onmouseout="this.style.opacity='1'">
                 <div style="display: flex; flex-direction: column;">
                   <span style="color: var(--color-text); font-size: 0.95rem; font-weight: 700;">{{ lot.remarks || (lot.type === 'DCA' ? '定期定額/定期定投' : '買入持股') }}</span>
                   <span style="color: var(--color-text-muted); font-size: 0.82rem; margin-top: 4px;">
