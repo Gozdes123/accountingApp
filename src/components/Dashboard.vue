@@ -3133,10 +3133,45 @@ const fetchYahooPrice = async (symbol) => {
   }
 }
 
+// 具備逾時機制的 Fetch 輔助工具，避免第三方 Proxy 卡住導致畫面長時間轉圈圈
+const fetchWithTimeout = async (url, options = {}, timeoutMs = 2500) => {
+  const controller = new AbortController()
+  const id = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal
+    })
+    clearTimeout(id)
+    return response
+  } catch (err) {
+    clearTimeout(id)
+    throw err
+  }
+}
+
 const fetchYahooPricesBatch = async (symbols) => {
   if (!symbols || symbols.length === 0) return {}
   
   const isProd = import.meta.env.PROD
+  
+  // 優化：本地開發環境下，由於 Yahoo Finance 對於 /v7/finance/quote 端點有嚴格的 Cookie/Crumb 阻擋 (導致 401)，
+  // 且第三方 CORS 代理也會被擋，因此在本地開發直接跳過這些必定失敗的請求，直接使用單獨平行查詢，省去 4 秒的逾時等待！
+  if (!isProd) {
+    console.info('本地開發模式：跳過受阻的批次端點，直接執行單獨平行股價查詢...')
+    const prices = {}
+    const promises = symbols.map(async (sym) => {
+      try {
+        const price = await fetchYahooPrice(sym)
+        if (price !== null) {
+          prices[sym] = price
+        }
+      } catch {}
+    })
+    await Promise.all(promises)
+    return prices
+  }
+
   const symbolsQueryStr = symbols.join(',')
   
   // 1. Try primary batch proxy (Vercel Proxy in Prod, local dev proxy in Dev)
@@ -3145,7 +3180,8 @@ const fetchYahooPricesBatch = async (symbols) => {
     : `/yahoo-finance/v7/finance/quote?symbols=${encodeURIComponent(symbolsQueryStr)}&fields=regularMarketPrice,currency,shortName`
     
   try {
-    const res = await fetch(proxyUrl)
+    // 主代理逾時設定為 3.5 秒
+    const res = await fetchWithTimeout(proxyUrl, {}, 3500)
     if (res.ok) {
       const data = await res.json()
       if (isProd) {
@@ -3177,7 +3213,8 @@ const fetchYahooPricesBatch = async (symbols) => {
 
   for (const fProxy of fallbackProxies) {
     try {
-      const res = await fetch(fProxy)
+      // 備用代理設定短逾時 2.0 秒，一旦卡住立刻跳下一個或進入單獨查詢
+      const res = await fetchWithTimeout(fProxy, {}, 2000)
       if (res.ok) {
         const data = await res.json()
         const prices = {}
@@ -3200,10 +3237,13 @@ const fetchYahooPricesBatch = async (symbols) => {
   console.warn('All batch proxies failed, executing parallel single fetches as fallback')
   const prices = {}
   const promises = symbols.map(async (sym) => {
-    const price = await fetchYahooPrice(sym)
-    if (price !== null) {
-      prices[sym] = price
-    }
+    // 單獨查詢也加上 3 秒逾時，確保整體流暢度
+    try {
+      const price = await fetchYahooPrice(sym)
+      if (price !== null) {
+        prices[sym] = price
+      }
+    } catch {}
   })
   await Promise.all(promises)
   return prices
