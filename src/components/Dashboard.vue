@@ -3481,7 +3481,7 @@ const addAssetItem = async () => {
         currency: newAsset.value.type === 'Stock' || newAsset.value.type === 'Crypto'
           ? (isTaiwanStock(newAsset.value.symbol) ? 'TWD' : 'USD')
           : 'TWD',
-        type: 'Stock',
+        type: isEditing.value ? (investments.value.find(i => i.id === editingId.value)?.type || 'Stock') : 'Stock',
         current_price: buyPrice,
         buy_price: buyPrice,
         buy_date: newAsset.value.buy_date,
@@ -3520,7 +3520,8 @@ const addAssetItem = async () => {
             buy_price: payload.buy_price,
             buy_date: payload.buy_date,
             custom_group: payload.custom_group,
-            funding_account_id: payload.funding_account_id
+            funding_account_id: payload.funding_account_id,
+            type: payload.type
           }).eq('id', editingId.value)
         } catch (dbErr) {
           console.warn('Supabase DB offline, updating locally only:', dbErr)
