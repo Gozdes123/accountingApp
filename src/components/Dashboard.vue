@@ -570,7 +570,8 @@ const editInvestment = (inv) => {
     buy_date: inv.buy_date || new Date().toISOString().split('T')[0],
     custom_group: inv.custom_group ?? '',
     funding_account_id: inv.funding_account_id || null,
-    include_in_chart: inv.include_in_chart !== false
+    include_in_chart: inv.include_in_chart !== false,
+    currency: inv.currency || (isTaiwanStock(inv.symbol) ? 'TWD' : 'USD')
   }
   
   subListType.value = null
@@ -872,7 +873,8 @@ const newAsset = ref({
   buy_price: '',
   buy_date: new Date().toISOString().split('T')[0],
   custom_group: '',
-  funding_account_id: null
+  funding_account_id: null,
+  currency: 'TWD'
 })
 
 // 折線圖時間篩選
@@ -2555,6 +2557,13 @@ const roiHistoryChartOptions = computed(() => ({
   }
 }))
 
+// 自動依據股票代號格式推導幣別 (TWD 或 USD)
+watch(() => newAsset.value.symbol, (newVal) => {
+  if (newAsset.value.category === 'invest') {
+    newAsset.value.currency = isTaiwanStock(newVal) ? 'TWD' : 'USD'
+  }
+})
+
 // 切換時間篩選器 → 清快取並重新抓取
 watch(timeFilter, () => {
   investmentPriceHistory.value = {}
@@ -3074,7 +3083,7 @@ const getYahooSymbol = (symbol, assetClass) => {
   }
   
   // Taiwan stock: 4-6 digit numeric code or tw_stock class
-  if (cls === 'tw_stock' || /^\d{4,6}$/.test(sym)) {
+  if (cls === 'tw_stock' || /^\d{4,6}[A-Z]?$/.test(sym)) {
     return `${sym}.TW`
   }
   
@@ -3286,6 +3295,8 @@ const validateSymbol = async () => {
         symbol: sym
       }
       
+      newAsset.value.currency = cur
+      
       // Auto fill name if empty
       if (!newAsset.value.name) {
         newAsset.value.name = sym
@@ -3392,7 +3403,8 @@ const selectSubtype = (category, subType, label) => {
   newAsset.value.quantity = ''
   newAsset.value.buy_price = ''
   newAsset.value.buy_date = new Date().toISOString().split('T')[0]
-  newAsset.value.custom_group = ''
+  newAsset.value.custom_group = activeCustomGroup.value || ''
+  newAsset.value.currency = 'TWD'
   newAssetAutoRecords.value = []
   
   addModalStep.value = 2 // Move to form input step
@@ -3478,9 +3490,11 @@ const addAssetItem = async () => {
         name: newAsset.value.name || newAsset.value.symbol.toUpperCase(),
         quantity: qty,
         average_cost: buyPrice,
-        currency: newAsset.value.type === 'Stock' || newAsset.value.type === 'Crypto'
-          ? (isTaiwanStock(newAsset.value.symbol) ? 'TWD' : 'USD')
-          : 'TWD',
+        currency: newAsset.value.currency || (
+          ['Stock', 'Crypto'].includes(newAsset.value.type)
+            ? (isTaiwanStock(newAsset.value.symbol) ? 'TWD' : 'USD')
+            : 'TWD'
+        ),
         type: isEditing.value ? (investments.value.find(i => i.id === editingId.value)?.type || 'Stock') : 'Stock',
         current_price: buyPrice,
         buy_price: buyPrice,
@@ -3833,7 +3847,7 @@ const getLastUpdatedText = (category) => {
 const isTaiwanStock = (symbol) => {
   if (!symbol) return false
   const sym = symbol.trim().toUpperCase()
-  return sym.endsWith('.TW') || /^\d{4,5}$/.test(sym)
+  return sym.endsWith('.TW') || sym.endsWith('.TWO') || /^\d{4,6}[A-Z]?$/.test(sym)
 }
 
 const formatInvestCurrency = (amount, currency = 'TWD') => {
@@ -3960,7 +3974,7 @@ const selectProvider = (item) => {
   newAsset.value.quantity = ''
   newAsset.value.buy_price = ''
   newAsset.value.buy_date = new Date().toISOString().split('T')[0]
-  newAsset.value.custom_group = ''
+  newAsset.value.custom_group = activeCustomGroup.value || ''
   newAsset.value.funding_account_id = null
   
   newAsset.value.include_in_chart = true
@@ -4138,10 +4152,10 @@ const processAutoRecords = async () => {
             
             const symbol = (ar.symbol || '').trim().toUpperCase()
             if (symbol) {
-              const querySym = getYahooSymbol(symbol, /^\d{4,6}$/.test(symbol) ? 'tw_stock' : 'stock')
+              const querySym = getYahooSymbol(symbol, /^\d{4,6}[A-Z]?$/.test(symbol) ? 'tw_stock' : 'stock')
               const price = await fetchYahooPrice(querySym)
               if (price !== null && price > 0) {
-                const isUsdStock = !(/^\d{4,6}$/.test(symbol) || symbol.endsWith('.TW') || symbol.endsWith('.TWO'))
+                const isUsdStock = !(/^\d{4,6}[A-Z]?$/.test(symbol) || symbol.endsWith('.TW') || symbol.endsWith('.TWO'))
                 
                 let quantity = 0
                 if (arCurrency === 'USD') {
@@ -4161,7 +4175,7 @@ const processAutoRecords = async () => {
 
                 const payload = {
                   id: generatedId,
-                  asset_class: /^\d{4,6}$/.test(symbol) ? 'tw_stock' : 'stock',
+                  asset_class: /^\d{4,6}[A-Z]?$/.test(symbol) ? 'tw_stock' : 'stock',
                   symbol: symbol,
                   name: symbol,
                   quantity: quantity,
@@ -6211,9 +6225,10 @@ onUnmounted(() => {
                 <span class="row-label">買入單價</span>
                 <div class="row-value-wrapper" style="display: flex; align-items: center; gap: 8px;">
                   <input v-model.number="newAsset.buy_price" type="number" step="0.01" placeholder="0.00" class="input-flat-right text-right" style="font-weight: 700; font-size: 1.15rem; width: 120px;" />
-                  <span class="currency-badge" style="background: rgba(92, 103, 245, 0.1); color: #5c67f5; padding: 4px 8px; border-radius: 6px; font-size: 0.75rem; font-weight: 700;">
-                    {{ isTaiwanStock(newAsset.symbol) ? 'TWD' : 'USD' }}
-                  </span>
+                  <select v-model="newAsset.currency" class="currency-select-inline">
+                    <option value="TWD">TWD</option>
+                    <option value="USD">USD</option>
+                  </select>
                 </div>
               </div>
 
@@ -6221,7 +6236,7 @@ onUnmounted(() => {
               <div class="form-item-row" style="padding: 14px 18px; border-bottom: 1px solid rgba(255, 255, 255, 0.05); display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.01);">
                 <span class="row-label" style="font-size: 0.85rem; color: var(--color-text-muted);">預估總成本</span>
                 <span style="font-size: 1rem; font-weight: 700; color: var(--color-text-muted);">
-                  {{ isTaiwanStock(newAsset.symbol) ? 'TWD' : 'USD' }} {{ formatInvestNumber(Number(newAsset.quantity || 0) * Number(newAsset.buy_price || 0)) }}
+                  {{ newAsset.currency || (isTaiwanStock(newAsset.symbol) ? 'TWD' : 'USD') }} {{ formatInvestNumber(Number(newAsset.quantity || 0) * Number(newAsset.buy_price || 0)) }}
                 </span>
               </div>
 
@@ -8487,6 +8502,25 @@ onUnmounted(() => {
   border-radius: 20px;
   font-size: 0.76rem;
   font-weight: 800;
+}
+
+.currency-select-inline {
+  background: rgba(92, 103, 245, 0.1);
+  color: #5c67f5;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  border: none;
+  outline: none;
+  cursor: pointer;
+  text-align-last: center;
+  padding-right: 4px;
+  transition: background-color 0.2s, color 0.2s;
+}
+
+.currency-select-inline:hover {
+  background: rgba(92, 103, 245, 0.18);
 }
 
 /* iOS Toggle Switch */
