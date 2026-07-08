@@ -6215,11 +6215,26 @@ onUnmounted(() => {
                 </div>
               </div>
 
+              <!-- 幣別 -->
+              <div class="form-item-row" style="position: relative; padding: 14px 18px; border-bottom: 1px solid rgba(255, 255, 255, 0.05); display: flex; justify-content: space-between; align-items: center;">
+                <span class="row-label">幣別</span>
+                <div class="row-value-wrapper" style="display: flex; align-items: center; gap: 8px;">
+                  <span class="display-val" style="color: var(--color-text); font-size: 0.95rem; font-weight: 700;">
+                    {{ newAsset.currency || 'TWD' }}
+                  </span>
+                  <PhCaretRight size="16" class="caret-indicator" style="color: var(--color-text-muted);" />
+                </div>
+                <select v-model="newAsset.currency" class="invisible-select">
+                  <option value="TWD">TWD (新台幣)</option>
+                  <option value="USD">USD (美金)</option>
+                </select>
+              </div>
+
               <!-- 股數 -->
               <div class="form-item-row" style="padding: 14px 18px; border-bottom: 1px solid rgba(255, 255, 255, 0.05); display: flex; justify-content: space-between; align-items: center;">
                 <span class="row-label">股數</span>
                 <div class="row-value-wrapper" style="display: flex; align-items: center; gap: 8px;">
-                  <input v-model.number="newAsset.quantity" type="number" step="0.0001" placeholder="0" class="input-flat-right text-right" style="font-weight: 700; font-size: 1.15rem; width: 120px;" />
+                  <input v-model.number="newAsset.quantity" type="number" step="0.0001" placeholder="0" class="input-flat-right text-right" style="font-weight: 700; font-size: 1.15rem; width: 100px !important;" />
                   <span class="currency-badge" style="background: rgba(255,255,255,0.08); padding: 4px 8px; border-radius: 6px; font-size: 0.75rem; font-weight: 700; color: var(--color-text-muted);">股</span>
                 </div>
               </div>
@@ -6228,11 +6243,10 @@ onUnmounted(() => {
               <div class="form-item-row" style="padding: 14px 18px; border-bottom: 1px solid rgba(255, 255, 255, 0.05); display: flex; justify-content: space-between; align-items: center;">
                 <span class="row-label">買入單價</span>
                 <div class="row-value-wrapper" style="display: flex; align-items: center; gap: 8px;">
-                  <input v-model.number="newAsset.buy_price" type="number" step="0.01" placeholder="0.00" class="input-flat-right text-right" style="font-weight: 700; font-size: 1.15rem; width: 120px;" />
-                  <select v-model="newAsset.currency" class="currency-select-inline">
-                    <option value="TWD">TWD</option>
-                    <option value="USD">USD</option>
-                  </select>
+                  <input v-model.number="newAsset.buy_price" type="number" step="0.01" placeholder="0.00" class="input-flat-right text-right" style="font-weight: 700; font-size: 1.15rem; width: 100px !important;" />
+                  <span class="currency-badge" style="background: rgba(92, 103, 245, 0.1); color: #5c67f5; padding: 4px 8px; border-radius: 6px; font-size: 0.75rem; font-weight: 700;">
+                    {{ newAsset.currency || 'TWD' }}
+                  </span>
                 </div>
               </div>
 
@@ -8485,6 +8499,8 @@ onUnmounted(() => {
   color: var(--color-text);
   font-size: 0.95rem;
   font-weight: 700;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .row-value-wrapper {
@@ -8532,18 +8548,26 @@ onUnmounted(() => {
 }
 
 .currency-select-inline {
-  background: rgba(92, 103, 245, 0.1);
-  color: #5c67f5;
-  padding: 4px 8px;
-  border-radius: 6px;
-  font-size: 0.75rem;
-  font-weight: 700;
-  border: none;
-  outline: none;
-  cursor: pointer;
-  text-align-last: center;
-  padding-right: 4px;
-  transition: background-color 0.2s, color 0.2s;
+  background: rgba(92, 103, 245, 0.1) !important;
+  color: #5c67f5 !important;
+  padding: 4px 18px 4px 10px !important;
+  border-radius: 6px !important;
+  font-size: 0.75rem !important;
+  font-weight: 700 !important;
+  border: none !important;
+  outline: none !important;
+  cursor: pointer !important;
+  text-align-last: center !important;
+  flex-shrink: 0 !important;
+  width: auto !important;
+  min-width: 62px !important;
+  margin: 0 !important;
+  -webkit-appearance: none !important;
+  appearance: none !important;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%235c67f5' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'></polyline></svg>") !important;
+  background-repeat: no-repeat !important;
+  background-position: right 6px center !important;
+  transition: background-color 0.2s, color 0.2s !important;
 }
 
 .currency-select-inline:hover {
