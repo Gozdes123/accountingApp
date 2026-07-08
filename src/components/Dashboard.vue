@@ -3273,20 +3273,53 @@ const validateSymbol = async () => {
   verificationResult.value = { loading: true }
   
   const querySym = getYahooSymbol(sym, newAsset.value.type)
+  const isProd = import.meta.env.PROD
+  const yhUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${querySym}?interval=1d&range=1d`
+  
+  let data = null
+  let fetchError = null
+  
+  // 1. Try local dev proxy if in development
+  if (!isProd) {
+    try {
+      const res = await fetch(`/yahoo-finance/v8/finance/chart/${querySym}?interval=1d&range=1d`)
+      if (res.ok) {
+        data = await res.json()
+      }
+    } catch (err) {
+      fetchError = err
+    }
+  }
+  
+  // 2. Sequential list of production/fallback proxies to try
+  if (!data) {
+    const proxies = [
+      `/api/yahoo-proxy?symbol=${querySym}`,
+      `https://corsproxy.io/?${encodeURIComponent(yhUrl)}`,
+      `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(yhUrl)}`,
+      `https://api.allorigins.win/raw?url=${encodeURIComponent(yhUrl)}`
+    ]
+    
+    for (const proxyUrl of proxies) {
+      try {
+        const res = await fetch(proxyUrl)
+        if (res.ok) {
+          data = await res.json()
+          break // Success!
+        }
+      } catch (err) {
+        fetchError = err
+      }
+    }
+  }
+  
   try {
-    const isProd = import.meta.env.PROD
-    const yhUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${querySym}?interval=1d&range=1d`
-    const url = isProd 
-      ? `https://api.allorigins.win/raw?url=${encodeURIComponent(yhUrl)}` 
-      : `/yahoo-finance/v8/finance/chart/${querySym}?interval=1d&range=1d`
-      
-    const res = await fetch(url)
-    if (!res.ok) {
-      verificationResult.value = { success: false, msg: '查無此標的，請檢查代號' }
+    if (!data) {
+      verificationResult.value = { success: false, msg: '驗證失敗，可直接手動輸入' }
       verifyingSymbol.value = false
       return
     }
-    const data = await res.json()
+    
     const meta = data?.chart?.result?.[0]?.meta
     const price = meta?.regularMarketPrice
     
