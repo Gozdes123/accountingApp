@@ -2049,11 +2049,13 @@ const moneyFlowAnalysis = computed(() => {
     })
     
     Object.entries(flows).forEach(([accName, stocks]) => {
+      const stocksList = Object.entries(stocks).map(([sym, cost]) => ({ symbol: sym, amount: cost }))
       const detailStr = Object.entries(stocks).map(([sym, cost]) => `${sym} (${formatInvestNumber(cost)} 元)`).join('、')
       flowItems.push({
         type: 'buy',
         accountName: accName,
         stockDetails: detailStr,
+        stocksList,
         text: `從 [${accName}] 流入股市：${detailStr}`
       })
     })
@@ -2075,11 +2077,13 @@ const moneyFlowAnalysis = computed(() => {
     })
     
     Object.entries(inflowFlows).forEach(([accName, stocks]) => {
+      const stocksList = Object.entries(stocks).map(([sym, val]) => ({ symbol: sym, amount: val }))
       const detailStr = Object.entries(stocks).map(([sym, val]) => `${sym} (${formatInvestNumber(val)} 元)`).join('、')
       flowItems.push({
         type: 'sell',
         accountName: accName,
         stockDetails: detailStr,
+        stocksList,
         text: `賣出變現匯入 [${accName}]：${detailStr}`
       })
     })
@@ -7446,13 +7450,36 @@ onUnmounted(() => {
                     {{ item.type === 'sell' ? '賣出' : '買入' }}
                   </span>
                 </div>
-                <div style="font-size: 0.8rem; color: var(--color-text-muted); font-weight: 500; margin-top: 2px;">
-                  <template v-if="item.type === 'buy'">
-                    從 <strong style="color: var(--color-text); font-weight: 700;">{{ item.accountName }}</strong> 流出 ➔ <span style="color: var(--color-primary); font-weight: 700;">{{ item.stockDetails }}</span>
-                  </template>
-                  <template v-else>
-                    變現 <span style="color: var(--color-success); font-weight: 700;">{{ item.stockDetails }}</span> ➔ 匯入 <strong style="color: var(--color-text); font-weight: 700;">{{ item.accountName }}</strong>
-                  </template>
+                <div style="font-size: 0.8rem; color: var(--color-text-muted); font-weight: 500; margin-top: 4px; display: flex; flex-direction: column; gap: 8px;">
+                  <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                    <template v-if="item.type === 'buy'">
+                      <span>從</span>
+                      <strong style="color: var(--color-text); font-weight: 700; background: rgba(255, 255, 255, 0.05); padding: 2px 6px; border-radius: 6px;">{{ item.accountName }}</strong>
+                      <span>流出 ➔</span>
+                    </template>
+                    <template v-else>
+                      <span>變現 ➔ 匯入</span>
+                      <strong style="color: var(--color-text); font-weight: 700; background: rgba(255, 255, 255, 0.05); padding: 2px 6px; border-radius: 6px;">{{ item.accountName }}</strong>
+                    </template>
+                  </div>
+                  
+                  <div v-if="item.stocksList && item.stocksList.length > 0" style="display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px;">
+                    <div v-for="stock in item.stocksList" :key="stock.symbol" 
+                         style="display: flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 8px; font-size: 0.78rem; font-weight: 700; border: 1px solid rgba(255,255,255,0.04);"
+                         :style="{
+                           background: item.type === 'buy' ? 'rgba(92, 103, 245, 0.06)' : 'rgba(46, 189, 89, 0.06)',
+                           color: item.type === 'buy' ? '#8b94f6' : '#5cd67c',
+                           borderColor: item.type === 'buy' ? 'rgba(92, 103, 245, 0.15)' : 'rgba(46, 189, 89, 0.15)'
+                         }">
+                      <span>{{ stock.symbol }}</span>
+                      <span style="font-weight: 500; font-size: 0.72rem; opacity: 0.85;">
+                        {{ formatInvestNumber(stock.amount) }} 元
+                      </span>
+                    </div>
+                  </div>
+                  <div v-else style="margin-top: 2px;">
+                    <span :style="{ color: item.type === 'buy' ? 'var(--color-primary)' : 'var(--color-success)', fontWeight: '700' }">{{ item.stockDetails }}</span>
+                  </div>
                 </div>
               </div>
             </div>
