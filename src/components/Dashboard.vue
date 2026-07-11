@@ -1703,7 +1703,8 @@ const trendDatasets = computed(() => {
             return acc
           }, {}),
           investments_value: todayInvest,
-          investments_cost: totalInvestmentCostTwd.value
+          investments_cost: totalInvestmentCostTwd.value,
+          transactions: todayTransactions.value || []
         }
       }
     }
@@ -2870,6 +2871,9 @@ const fetchAllData = async () => {
     mergeExclusionSettings()
     isInitialDataLoaded.value = true
   }
+
+  // 先載入歷史快照與今日交易 (避免後續儲存快照時覆蓋掉已有的交易明細)
+  await fetchHistoricalSnapshots()
 
   // 2. 背景抓取即時匯率
   try {
