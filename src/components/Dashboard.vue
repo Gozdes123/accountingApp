@@ -340,6 +340,182 @@ const isSyncingData = ref(false)
 const verifyingSymbol = ref(false)
 const verificationResult = ref(null)
 
+// ── 交易防禦與加倉策略設定 (Anti-Impulse Dip Strategy) ─────────────
+const strategySettings = ref({
+  maxMonthlyTradesPerSymbol: 2,
+  targetDipPercentage: -8
+})
+
+const loadStrategySettings = () => {
+  try {
+    const saved = localStorage.getItem('strategy_settings')
+    if (saved) {
+      const parsed = JSON.parse(saved)
+      if (parsed.maxMonthlyTradesPerSymbol) strategySettings.value.maxMonthlyTradesPerSymbol = Number(parsed.maxMonthlyTradesPerSymbol)
+      if (parsed.targetDipPercentage) strategySettings.value.targetDipPercentage = Number(parsed.targetDipPercentage)
+    }
+  } catch {}
+}
+
+const saveStrategySettings = () => {
+  localStorage.setItem('strategy_settings', JSON.stringify(strategySettings.value))
+}
+
+loadStrategySettings()
+
+const getHoldingDays = (buyDateStr) => {
+  if (!buyDateStr) return 0
+  const buyDate = new Date(buyDateStr)
+  if (isNaN(buyDate.getTime())) return 0
+  const today = new Date()
+  const diffTime = today.getTime() - buyDate.getTime()
+  const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24))
+  return Math.max(0, diffDays)
+}
+
+const monthlyTradeStats = computed(() => {
+  const today = new Date()
+  const currentYearMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`
+  const stats = { totalThisMonth: 0, bySymbol: {} }
+  
+  if (!Array.isArray(investments.value)) return stats
+  
+  investments.value.forEach(inv => {
+    if (!inv.symbol) return
+    const bDate = inv.buy_date || inv.created_at
+    if (!bDate) return
+    const d = new Date(bDate)
+    if (isNaN(d.getTime())) return
+    const yearMonth = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+    
+    if (yearMonth === currentYearMonth) {
+      const sym = inv.symbol.toUpperCase()
+      stats.totalThisMonth += 1
+      stats.bySymbol[sym] = (stats.bySymbol[sym] || 0) + 1
+    }
+  })
+  
+  return stats
+})
+
+const dipStrategyAdvice = computed(() => {
+  const sym = (newAsset.value.symbol || '').trim().toUpperCase()
+  if (!sym) return null
+  
+  const monthlyCount = monthlyTradeStats.value.bySymbol[sym] || 0
+  
+  const existingLots = (investments.value || [])
+    .filter(i => i.symbol && i.symbol.toUpperCase() === sym)
+    .sort((a, b) => new Date(b.buy_date || b.created_at || 0) - new Date(a.buy_date || a.created_at || 0))
+    
+  if (existingLots.length === 0) {
+    return {
+      monthlyCount,
+      hasPriorLot: false
+    }
+  }
+  
+  const lastLot = existingLots[0]
+  const lastBuyPrice = Number(lastLot.buy_price || lastLot.average_cost || 0)
+  const lastBuyDate = lastLot.buy_date || lastLot.created_at || ''
+  const inputPrice = Number(newAsset.value.buy_price || 0)
+  const inputQty = Number(newAsset.value.quantity || 0)
+  
+  let dipFromLast = 0
+  if (lastBuyPrice > 0 && inputPrice > 0) {
+    dipFromLast = ((inputPrice - lastBuyPrice) / lastBuyPrice) * 100
+  }
+  
+  let totalQty = 0
+  let totalCost = 0
+  existingLots.forEach(lot => {
+    const q = Number(lot.quantity || 0)
+    const p = Number(lot.buy_price || lot.average_cost || 0)
+    totalQty += q
+    totalCost += q * p
+  })
+  
+  const oldAvgCost = totalQty > 0 ? (totalCost / totalQty) : 0
+  const newTotalQty = totalQty + inputQty
+  const newTotalCost = totalCost + (inputQty * inputPrice)
+  const newAvgCost = newTotalQty > 0 ? (newTotalCost / newTotalQty) : 0
+  
+  let costReductionPct = 0
+  if (oldAvgCost > 0) {
+    costReductionPct = ((newAvgCost - oldAvgCost) / oldAvgCost) * 100
+  }
+  
+  const targetEntryPrice = lastBuyPrice > 0 ? lastBuyPrice * (1 + (strategySettings.value.targetDipPercentage / 100)) : 0
+
+  return {
+    monthlyCount,
+    hasPriorLot: true,
+    lastBuyPrice,
+    lastBuyDate,
+    targetEntryPrice,
+    dipFromLast,
+    oldAvgCost,
+    newAvgCost,
+    costReductionPct
+  }
+})
+
+const adjustSharesAdvice = computed(() => {
+  if (!selectedInvestment.value) return null
+  const sym = selectedInvestment.value.symbol.toUpperCase()
+  const monthlyCount = monthlyTradeStats.value.bySymbol[sym] || 0
+  
+  const lots = selectedInvestment.value.lots || []
+  if (lots.length === 0) {
+    return { monthlyCount, hasPriorLot: false }
+  }
+  
+  const lastLot = lots[0]
+  const lastBuyPrice = Number(lastLot.buy_price || lastLot.average_cost || 0)
+  const inputPrice = Number(adjustPrice.value || 0)
+  const inputQty = Number(adjustSharesVal.value || 0)
+  
+  let dipFromLast = 0
+  if (lastBuyPrice > 0 && inputPrice > 0) {
+    dipFromLast = ((inputPrice - lastBuyPrice) / lastBuyPrice) * 100
+  }
+  
+  let totalQty = 0
+  let totalCost = 0
+  lots.forEach(lot => {
+    const q = Number(lot.quantity || 0)
+    const p = Number(lot.buy_price || lot.average_cost || 0)
+    totalQty += q
+    totalCost += q * p
+  })
+  
+  const oldAvgCost = totalQty > 0 ? (totalCost / totalQty) : 0
+  const newTotalQty = totalQty + inputQty
+  const newTotalCost = totalCost + (inputQty * inputPrice)
+  const newAvgCost = newTotalQty > 0 ? (newTotalCost / newTotalQty) : 0
+  
+  let costReductionPct = 0
+  if (oldAvgCost > 0) {
+    costReductionPct = ((newAvgCost - oldAvgCost) / oldAvgCost) * 100
+  }
+
+  const targetEntryPrice = lastBuyPrice > 0 ? lastBuyPrice * (1 + (strategySettings.value.targetDipPercentage / 100)) : 0
+  
+  return {
+    monthlyCount,
+    hasPriorLot: true,
+    lastBuyPrice,
+    targetEntryPrice,
+    dipFromLast,
+    oldAvgCost,
+    newAvgCost,
+    costReductionPct
+  }
+})
+
+
+
+
 // 下拉重新整理 (Pull-to-Refresh) 狀態與手勢事件
 const listScrollContainer = ref(null)
 const pullDistance = ref(0)
@@ -5835,8 +6011,47 @@ onUnmounted(() => {
     <!-- ── 3. 資料管理視圖 (Settings Tab) ────────────────────────────── -->
     <div v-else-if="currentTab === 'settings'" key="settings" class="tab-view-content" style="gap: 1rem;">
       <div class="settings-header-row">
-        <h3>管理所有原始帳目</h3>
+        <h3>管理所有原始帳目與防禦策略</h3>
       </div>
+
+      <!-- Anti-Impulse Strategy Settings -->
+      <div class="settings-section card">
+        <h4 class="section-title">加倉防禦策略提醒設定</h4>
+        <div class="settings-table-list" style="padding: 12px 16px; display: flex; flex-direction: column; gap: 12px;">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span style="font-size: 0.88rem; font-weight: 700; color: var(--color-text);">單月單一股票建議加倉上限</span>
+            <div style="display: flex; align-items: center; gap: 4px;">
+              <input 
+                v-model.number="strategySettings.maxMonthlyTradesPerSymbol" 
+                type="number" 
+                min="1" 
+                max="10" 
+                @change="saveStrategySettings"
+                class="reset-input" 
+                style="width: 60px; text-align: right; background: rgba(0,0,0,0.04); border: 1px solid var(--color-card-border); border-radius: 8px; padding: 4px 8px; font-weight: 700; font-size: 0.9rem; color: var(--color-text); outline: none;" 
+              />
+              <span style="font-size: 0.82rem; font-weight: 600; color: var(--color-text-muted);">次</span>
+            </div>
+          </div>
+          <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px dashed var(--color-card-border); padding-top: 10px;">
+            <span style="font-size: 0.88rem; font-weight: 700; color: var(--color-text);">建議補倉跌幅門檻</span>
+            <div style="display: flex; align-items: center; gap: 4px;">
+              <input 
+                v-model.number="strategySettings.targetDipPercentage" 
+                type="number" 
+                max="0" 
+                min="-50" 
+                step="1" 
+                @change="saveStrategySettings"
+                class="reset-input" 
+                style="width: 60px; text-align: right; background: rgba(0,0,0,0.04); border: 1px solid var(--color-card-border); border-radius: 8px; padding: 4px 8px; font-weight: 700; font-size: 0.9rem; color: var(--color-text); outline: none;" 
+              />
+              <span style="font-size: 0.82rem; font-weight: 600; color: var(--color-text-muted);">%</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
 
       <!-- Accounts Table List -->
       <div class="settings-section card">
@@ -6367,6 +6582,61 @@ onUnmounted(() => {
                 <input v-model="newAsset.buy_date" type="date" class="input-flat-right text-right" />
               </div>
             </div>
+
+            <!-- 理性加倉防禦策略評估卡片 (無 Icon、俐落純文字樣式) -->
+            <div v-if="dipStrategyAdvice && newAsset.symbol" class="form-card-black" style="padding: 16px; margin-bottom: 20px; background: rgba(0, 0, 0, 0.015);">
+              <div style="font-size: 0.78rem; font-weight: 800; color: var(--color-text-muted); margin-bottom: 12px; letter-spacing: 0.05em; text-transform: uppercase;">
+                加倉策略與效益評估
+              </div>
+              <div style="display: flex; flex-direction: column; gap: 10px; font-size: 0.85rem; color: var(--color-text);">
+                <!-- 1. 月交易次數 -->
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                  <span style="color: var(--color-text-muted); font-weight: 600;">本月加倉次數</span>
+                  <span :style="{ 
+                    color: dipStrategyAdvice.monthlyCount >= strategySettings.maxMonthlyTradesPerSymbol ? 'var(--color-danger)' : 'var(--color-text)',
+                    fontWeight: '700'
+                  }">
+                    已買入 {{ dipStrategyAdvice.monthlyCount }} 次 (建議上限 {{ strategySettings.maxMonthlyTradesPerSymbol }} 次)
+                  </span>
+                </div>
+
+                <!-- 2. 建議入手目標價 -->
+                <div v-if="dipStrategyAdvice.hasPriorLot" style="display: flex; justify-content: space-between; align-items: center; border-top: 1px dashed var(--color-card-border); padding-top: 8px;">
+                  <span style="color: var(--color-text-muted); font-weight: 600;">建議入手目標價</span>
+                  <span style="font-weight: 800; font-family: var(--font-display); color: var(--color-text);">
+                    ${{ formatInvestNumber(dipStrategyAdvice.targetEntryPrice.toFixed(2)) }}
+                    <span style="font-size: 0.75rem; font-weight: 700; color: var(--color-text-muted); margin-left: 4px;">
+                      (距上一筆跌 {{ Math.abs(strategySettings.targetDipPercentage) }}%)
+                    </span>
+                  </span>
+                </div>
+
+                <!-- 3. 距上一筆買入價跌幅 -->
+                <div v-if="dipStrategyAdvice.hasPriorLot" style="display: flex; justify-content: space-between; align-items: center; border-top: 1px dashed var(--color-card-border); padding-top: 8px;">
+                  <span style="color: var(--color-text-muted); font-weight: 600;">距上一筆 (${{ formatInvestNumber(dipStrategyAdvice.lastBuyPrice) }})</span>
+                  <span :style="{ 
+                    color: dipStrategyAdvice.dipFromLast <= strategySettings.targetDipPercentage ? 'var(--color-success)' : 'var(--color-text-muted)',
+                    fontWeight: '700'
+                  }">
+                    {{ dipStrategyAdvice.dipFromLast > 0 ? '+' : '' }}{{ dipStrategyAdvice.dipFromLast.toFixed(1) }}%
+                    ({{ dipStrategyAdvice.dipFromLast <= strategySettings.targetDipPercentage ? '已達入手價' : '高於目標價' }})
+                  </span>
+                </div>
+
+
+                <!-- 3. 新平均成本與拉低效果 -->
+                <div v-if="dipStrategyAdvice.hasPriorLot && newAsset.quantity > 0 && newAsset.buy_price > 0" style="display: flex; justify-content: space-between; align-items: center; border-top: 1px dashed var(--color-card-border); padding-top: 8px;">
+                  <span style="color: var(--color-text-muted); font-weight: 600;">預估新平均成本</span>
+                  <span style="font-weight: 800; font-family: var(--font-display);">
+                    ${{ formatInvestNumber(dipStrategyAdvice.newAvgCost.toFixed(2)) }}
+                    <span style="font-size: 0.75rem; font-weight: 700; color: var(--color-text-muted); margin-left: 4px;">
+                      (拉低 {{ Math.abs(dipStrategyAdvice.costReductionPct).toFixed(1) }}%)
+                    </span>
+                  </span>
+                </div>
+              </div>
+            </div>
+
           </template>
 
           <!-- Case B: Fixed Amount Cash, Bank, RealEstate, Car, Payable, Loan, Receivables etc. -->
@@ -6759,7 +7029,9 @@ onUnmounted(() => {
           <div class="history-section" style="text-align: left;">
             <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(0,0,0,0.06); padding-bottom: 10px; margin-bottom: 14px;">
               <span style="color: var(--color-text-muted); font-size: 0.9rem; font-weight: 700;">現有持股明細 (Lots)</span>
-              <span style="color: var(--color-text-muted); font-size: 0.85rem; cursor: pointer; opacity: 0.7;">⚙️</span>
+              <span style="color: var(--color-text-muted); font-size: 0.78rem; font-weight: 700; background: rgba(0,0,0,0.04); padding: 3px 8px; border-radius: 6px;">
+                本月加倉 {{ monthlyTradeStats.bySymbol[selectedSymbol] || 0 }} 次
+              </span>
             </div>
 
             <!-- List of Lots -->
@@ -6770,8 +7042,11 @@ onUnmounted(() => {
                   <span style="color: var(--color-text-muted); font-size: 0.82rem; margin-top: 4px;">
                     持有 {{ isHidden ? '••••' : formatInvestNumber(lot.quantity) }}, {{ lot.currency }} {{ isHidden ? '••••' : formatInvestNumber(lot.buy_price) }}
                   </span>
-                  <span style="color: var(--color-text-muted); opacity: 0.8; font-size: 0.8rem; margin-top: 4px;">{{ formatDateDetailed(lot.buy_date || lot.created_at) }}</span>
+                  <span style="color: var(--color-text-muted); opacity: 0.8; font-size: 0.8rem; margin-top: 4px;">
+                    買入日期：{{ (lot.buy_date || lot.created_at || '').split('T')[0] }} (已持有 {{ getHoldingDays(lot.buy_date || lot.created_at) }} 天)
+                  </span>
                 </div>
+
                 <div style="display: flex; flex-direction: column; align-items: flex-end;">
                   <span style="color: #2ec173; font-size: 0.95rem; font-weight: 700;">
                     {{ isHidden ? '••••••' : formatHistoryValue(lot.quantity * lot.current_price, lot.currency) }}
@@ -6930,6 +7205,61 @@ onUnmounted(() => {
               持有 {{ Math.max(0, selectedInvestment.quantity + (adjustAction === 'plus' ? Number(adjustSharesVal || 0) : -Number(adjustSharesVal || 0))) }}
             </div>
           </div>
+
+          <!-- 理性加倉防禦策略評估卡片 (僅在加倉 + 模式下顯示) -->
+          <div v-if="adjustAction === 'plus' && adjustSharesAdvice" style="margin-top: 20px; padding: 16px; border-radius: 16px; background: rgba(0, 0, 0, 0.015); border: 1px solid var(--color-card-border); text-align: left;">
+            <div style="font-size: 0.78rem; font-weight: 800; color: var(--color-text-muted); margin-bottom: 12px; letter-spacing: 0.05em; text-transform: uppercase;">
+              加倉策略與效益評估
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 10px; font-size: 0.85rem; color: var(--color-text);">
+              <!-- 1. 月交易次數 -->
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="color: var(--color-text-muted); font-weight: 600;">本月加倉次數</span>
+                <span :style="{ 
+                  color: adjustSharesAdvice.monthlyCount >= strategySettings.maxMonthlyTradesPerSymbol ? 'var(--color-danger)' : 'var(--color-text)',
+                  fontWeight: '700'
+                }">
+                  已買入 {{ adjustSharesAdvice.monthlyCount }} 次 (建議上限 {{ strategySettings.maxMonthlyTradesPerSymbol }} 次)
+                </span>
+              </div>
+
+              <!-- 2. 建議入手目標價 -->
+              <div v-if="adjustSharesAdvice.hasPriorLot" style="display: flex; justify-content: space-between; align-items: center; border-top: 1px dashed var(--color-card-border); padding-top: 8px;">
+                <span style="color: var(--color-text-muted); font-weight: 600;">建議入手目標價</span>
+                <span style="font-weight: 800; font-family: var(--font-display); color: var(--color-text);">
+                  ${{ formatInvestNumber(adjustSharesAdvice.targetEntryPrice.toFixed(2)) }}
+                  <span style="font-size: 0.75rem; font-weight: 700; color: var(--color-text-muted); margin-left: 4px;">
+                    (距上一筆跌 {{ Math.abs(strategySettings.targetDipPercentage) }}%)
+                  </span>
+                </span>
+              </div>
+
+              <!-- 3. 距上一筆買入價跌幅 -->
+              <div v-if="adjustSharesAdvice.hasPriorLot" style="display: flex; justify-content: space-between; align-items: center; border-top: 1px dashed var(--color-card-border); padding-top: 8px;">
+                <span style="color: var(--color-text-muted); font-weight: 600;">距上一筆 (${{ formatInvestNumber(adjustSharesAdvice.lastBuyPrice) }})</span>
+                <span :style="{ 
+                  color: adjustSharesAdvice.dipFromLast <= strategySettings.targetDipPercentage ? 'var(--color-success)' : 'var(--color-text-muted)',
+                  fontWeight: '700'
+                }">
+                  {{ adjustSharesAdvice.dipFromLast > 0 ? '+' : '' }}{{ adjustSharesAdvice.dipFromLast.toFixed(1) }}%
+                  ({{ adjustSharesAdvice.dipFromLast <= strategySettings.targetDipPercentage ? '已達入手價' : '高於目標價' }})
+                </span>
+              </div>
+
+
+              <!-- 3. 新平均成本與拉低效果 -->
+              <div v-if="adjustSharesAdvice.hasPriorLot && adjustSharesVal > 0 && adjustPrice > 0" style="display: flex; justify-content: space-between; align-items: center; border-top: 1px dashed var(--color-card-border); padding-top: 8px;">
+                <span style="color: var(--color-text-muted); font-weight: 600;">預估新平均成本</span>
+                <span style="font-weight: 800; font-family: var(--font-display);">
+                  ${{ formatInvestNumber(adjustSharesAdvice.newAvgCost.toFixed(2)) }}
+                  <span style="font-size: 0.75rem; font-weight: 700; color: var(--color-text-muted); margin-left: 4px;">
+                    (拉低 {{ Math.abs(adjustSharesAdvice.costReductionPct).toFixed(1) }}%)
+                  </span>
+                </span>
+              </div>
+            </div>
+          </div>
+
 
           <!-- Submit Button -->
           <button 
