@@ -1266,7 +1266,18 @@ const submitAdjustShares = async () => {
           } catch {}
         }
       }
-      investments.value = investments.value.filter(i => i.quantity > 0)
+      const symUpper = inv.symbol.toUpperCase()
+      const totalCostBeforeSell = lots.reduce((sum, l) => sum + (Number(l.quantity || 0) * Number(l.average_cost || l.buy_price || 0)), 0)
+      const totalQtyBeforeSell = lots.reduce((sum, l) => sum + Number(l.quantity || 0), 0)
+      const avgCostBeforeSell = totalQtyBeforeSell > 0 ? (totalCostBeforeSell / totalQtyBeforeSell) : 0
+
+      investments.value.forEach(i => {
+        if (i.symbol.toUpperCase() === symUpper && i.quantity === 0) {
+          i.last_average_cost = avgCostBeforeSell
+        }
+      })
+
+      investments.value = investments.value.filter(i => i.quantity > 0 || (i.last_average_cost && i.last_average_cost > 0))
     }
     localStorage.setItem('local_investments', JSON.stringify(investments.value))
 
@@ -1444,6 +1455,7 @@ const groupedInvestments = computed(() => {
         current_price: Number(inv.current_price || 0),
         qty: 0,
         costTwd: 0,
+        last_average_cost: Number(inv.last_average_cost || 0),
         price_updated_at: inv.price_updated_at,
         custom_group: inv.custom_group || ''
       }
@@ -1451,6 +1463,10 @@ const groupedInvestments = computed(() => {
     const qty = Number(inv.quantity || 0)
     groups[sym].qty += qty
     
+    if (inv.last_average_cost && inv.last_average_cost > 0) {
+      groups[sym].last_average_cost = Number(inv.last_average_cost)
+    }
+
     // 計算該筆投資的台幣成本
     const buyPrice = Number(inv.buy_price || inv.average_cost || 0)
     const lotCost = qty * buyPrice
@@ -1469,12 +1485,22 @@ const groupedInvestments = computed(() => {
     const pct = totalInvestments.value > 0 ? (valTwd / totalInvestments.value) * 100 : 0
     const pnl = valTwd - g.costTwd
     const pnlPct = g.costTwd > 0 ? (pnl / g.costTwd) * 100 : 0
+    
+    // 強制使用當前真實實際數字（qty > 0 時為 costTwd / qty）。若已歸零(qty === 0)，如果有記錄 last_average_cost 則使用，否則為 0 (既往不咎不顯示)
+    let avgCostNative = 0
+    if (g.qty > 0) {
+      avgCostNative = g.currency === 'USD' ? (g.costTwd / usdTwdRate.value / g.qty) : (g.costTwd / g.qty)
+    } else if (g.last_average_cost > 0) {
+      avgCostNative = g.last_average_cost
+    }
+
     return {
       ...g,
       valueTwd: valTwd,
       percentage: pct,
       pnl,
-      pnlPct
+      pnlPct,
+      avgCostNative
     }
   }).sort((a, b) => b.valueTwd - a.valueTwd)
 })
@@ -1610,8 +1636,10 @@ const investListItems = computed(() => {
           percentage: itemPct,
           valueTwd: item.valueTwd,
           formattedQty,
+          qty: item.qty,
           currency: item.currency || 'TWD',
           current_price: item.current_price || 0,
+          avgCostNative: item.avgCostNative || 0,
           price_updated_at: item.price_updated_at,
           pnl: item.pnl,
           pnlPct: item.pnlPct,
@@ -4600,6 +4628,84 @@ const submitCreateGroup = () => {
   showCreateGroupModal.value = false
 }
 
+// ── 補登記賣出股票損益 Modal 狀態與邏輯 ──────────────────────────────────
+const showRealizedProfitModal = ref(false)
+const realizedProfitForm = ref({
+  symbol: '',
+  profit: '',
+  currency: 'TWD',
+  funding_account_id: null,
+  sync_account_balance: false, // 預設關閉，避免重複加算已存在的帳戶餘額
+  date: new Date().toISOString().split('T')[0],
+  remarks: ''
+})
+
+const openRealizedProfitModal = (symbolStr = '') => {
+  realizedProfitForm.value = {
+    symbol: symbolStr ? symbolStr.toUpperCase() : '',
+    profit: '',
+    currency: 'TWD',
+    funding_account_id: null,
+    sync_account_balance: false,
+    date: new Date().toISOString().split('T')[0],
+    remarks: '補登記賣出股票損益'
+  }
+  showRealizedProfitModal.value = true
+}
+
+const submitRealizedProfitRecord = async () => {
+  if (!realizedProfitForm.value.symbol || realizedProfitForm.value.profit === '') return
+  
+  const sym = realizedProfitForm.value.symbol.toUpperCase().trim()
+  const profitVal = Number(realizedProfitForm.value.profit || 0)
+  const currencyVal = realizedProfitForm.value.currency || 'TWD'
+  const fundId = realizedProfitForm.value.funding_account_id || null
+  const syncBal = realizedProfitForm.value.sync_account_balance
+  const dateVal = realizedProfitForm.value.date || new Date().toISOString().split('T')[0]
+  
+  const newTx = {
+    type: 'sell',
+    symbol: sym,
+    quantity: 0,
+    price: 0,
+    average_cost: 0,
+    profit: profitVal,
+    currency: currencyVal,
+    funding_account_id: fundId,
+    date: dateVal,
+    remarks: realizedProfitForm.value.remarks || '補登記賣出股票損益'
+  }
+
+  // 1. 寫入當日/歷史交易紀錄
+  todayTransactions.value.push(newTx)
+  localStorage.setItem('today_transactions', JSON.stringify(todayTransactions.value))
+
+  // 2. 只有在使用者開啟「同步修改帳戶餘額」時才更新帳戶金額
+  if (fundId && syncBal) {
+    const rate = currencyVal === 'USD' ? usdTwdRate.value : 1
+    const pnlTwd = Math.round(profitVal * rate)
+    accounts.value = accounts.value.map(acc => {
+      if (acc.id === fundId) {
+        return { ...acc, balance: Number(acc.balance || 0) + pnlTwd }
+      }
+      return acc
+    })
+    localStorage.setItem('local_accounts', JSON.stringify(accounts.value))
+    
+    // 背景同步至 Supabase
+    const accToUpdate = accounts.value.find(a => a.id === fundId)
+    if (accToUpdate && !String(accToUpdate.id).startsWith('local-')) {
+      supabase.from('accounts').update({ balance: accToUpdate.balance }).eq('id', accToUpdate.id)
+    }
+  }
+
+  // 3. 儲存快照
+  await saveDailySnapshot(netWorth.value)
+
+  // 4. 關閉彈窗
+  showRealizedProfitModal.value = false
+}
+
 // Manage Group Modal State
 const showManageGroupModal = ref(false)
 const selectedGroupToManage = ref('')
@@ -5027,7 +5133,11 @@ onUnmounted(() => {
                             <template v-else>
                               <span>{{ isHidden ? '••••' : item.formattedQty }} 股</span>
                               <span style="opacity: 0.5;">·</span>
-                              <span>{{ item.currency }} {{ isHidden ? '••••' : item.current_price }}</span>
+                              <span>現價 ${{ isHidden ? '••••' : item.current_price }}</span>
+                              <template v-if="item.avgCostNative && item.avgCostNative > 0">
+                                <span style="opacity: 0.5;">·</span>
+                                <span style="color: var(--color-primary); font-weight: 600;">均價 ${{ isHidden ? '••••' : Number(item.avgCostNative).toFixed(2).replace(/\.00$/, '') }}</span>
+                              </template>
                             </template>
                             <span v-if="item.price_updated_at" style="opacity: 0.5; margin-left: 2px; font-size: 0.7rem;">({{ formatDate(item.price_updated_at) }})</span>
                           </div>
@@ -7016,12 +7126,15 @@ onUnmounted(() => {
             </div>
           </div>
 
-          <div style="display: flex; gap: 14px; margin-bottom: 36px;">
-            <button class="pill-btn-gray" @click="openAdjustShares()" style="flex: 1; padding: 12px; border-radius: 50px; font-weight: 700; font-size: 0.95rem; background: rgba(0, 0, 0, 0.05); color: var(--color-text); border: none; cursor: pointer; transition: background 0.2s;" onmouseover="this.style.background='rgba(0, 0, 0, 0.08)'" onmouseout="this.style.background='rgba(0, 0, 0, 0.05)'">
+          <div style="display: flex; gap: 10px; margin-bottom: 36px;">
+            <button class="pill-btn-gray" @click="openAdjustShares()" style="flex: 1; padding: 12px 6px; border-radius: 50px; font-weight: 700; font-size: 0.88rem; background: rgba(0, 0, 0, 0.05); color: var(--color-text); border: none; cursor: pointer; transition: background 0.2s;" onmouseover="this.style.background='rgba(0, 0, 0, 0.08)'" onmouseout="this.style.background='rgba(0, 0, 0, 0.05)'">
               增減股數
             </button>
-            <button class="pill-btn-white" @click="openModifyBalance()" style="flex: 1; padding: 12px; border-radius: 50px; font-weight: 700; font-size: 0.95rem; background: var(--color-primary); color: #ffffff; border: none; cursor: pointer; transition: opacity 0.2s;" onmouseover="this.style.opacity='0.9'" onmouseout="this.style.opacity='1'">
+            <button class="pill-btn-white" @click="openModifyBalance()" style="flex: 1; padding: 12px 6px; border-radius: 50px; font-weight: 700; font-size: 0.88rem; background: var(--color-primary); color: #ffffff; border: none; cursor: pointer; transition: opacity 0.2s;" onmouseover="this.style.opacity='0.9'" onmouseout="this.style.opacity='1'">
               修改餘額
+            </button>
+            <button @click="openRealizedProfitModal(selectedSymbol)" style="flex: 1; padding: 12px 6px; border-radius: 50px; font-weight: 700; font-size: 0.88rem; background: rgba(46, 189, 89, 0.1); color: #2ec173; border: 1px solid rgba(46, 189, 89, 0.2); cursor: pointer; transition: opacity 0.2s;" onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">
+              補登記損益
             </button>
           </div>
 
@@ -7379,6 +7492,74 @@ onUnmounted(() => {
       </div>
     </div>
 
+    <!-- ── 補登記賣出股票損益 Modal ── -->
+    <div v-if="showRealizedProfitModal" class="modal-overlay" style="z-index: 3000; background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;">
+      <div class="card" style="width: 90%; max-width: 400px; padding: 1.5rem; border: 1px solid var(--color-card-border); background: var(--color-card-bg); box-shadow: var(--shadow-lg); display: flex; flex-direction: column; gap: 1.2rem;">
+        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(0,0,0,0.06); padding-bottom: 0.8rem;">
+          <h3 style="margin: 0; font-size: 1.1rem; color: var(--color-text); font-weight: 800;">補登記賣出股票損益</h3>
+          <button @click="showRealizedProfitModal = false" style="background: none; border: none; color: var(--color-text-muted); cursor: pointer; padding: 4px; font-size: 1.3rem; line-height: 1;">
+            &times;
+          </button>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 1rem; text-align: left;">
+          <div>
+            <label style="font-size: 0.82rem; color: var(--color-text-muted); font-weight: 700; display: block; margin-bottom: 4px;">股票代號</label>
+            <input v-model="realizedProfitForm.symbol" placeholder="例如：GOOGL, 0050" style="width: 100%; height: 42px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--color-card-border); background: var(--color-bg); color: var(--color-text); font-size: 0.92rem; outline: none; box-sizing: border-box;" />
+          </div>
+
+          <div>
+            <label style="font-size: 0.82rem; color: var(--color-text-muted); font-weight: 700; display: block; margin-bottom: 4px;">賣出實現損益金額 (正數獲利，負數虧損)</label>
+            <input v-model.number="realizedProfitForm.profit" type="number" step="any" placeholder="例如：5000 或 -2000" style="width: 100%; height: 42px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--color-card-border); background: var(--color-bg); color: var(--color-text); font-size: 0.92rem; outline: none; box-sizing: border-box;" />
+          </div>
+
+          <div style="display: flex; gap: 10px;">
+            <div style="flex: 1;">
+              <label style="font-size: 0.82rem; color: var(--color-text-muted); font-weight: 700; display: block; margin-bottom: 4px;">幣別</label>
+              <select v-model="realizedProfitForm.currency" style="width: 100%; height: 42px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--color-card-border); background: var(--color-bg); color: var(--color-text); font-size: 0.88rem; outline: none; box-sizing: border-box;">
+                <option value="TWD">TWD (新台幣)</option>
+                <option value="USD">USD (美金)</option>
+              </select>
+            </div>
+            <div style="flex: 1;">
+              <label style="font-size: 0.82rem; color: var(--color-text-muted); font-weight: 700; display: block; margin-bottom: 4px;">交易日期</label>
+              <input v-model="realizedProfitForm.date" type="date" style="width: 100%; height: 42px; padding: 0 10px; border-radius: 10px; border: 1px solid var(--color-card-border); background: var(--color-bg); color: var(--color-text); font-size: 0.85rem; outline: none; box-sizing: border-box;" />
+            </div>
+          </div>
+
+          <div>
+            <label style="font-size: 0.82rem; color: var(--color-text-muted); font-weight: 700; display: block; margin-bottom: 4px;">收益匯入帳戶 (用於流向顯示)</label>
+            <select v-model="realizedProfitForm.funding_account_id" style="width: 100%; height: 42px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--color-card-border); background: var(--color-bg); color: var(--color-text); font-size: 0.88rem; outline: none; box-sizing: border-box;">
+              <option :value="null">無連動帳戶 (僅記錄損益)</option>
+              <option v-for="acc in accounts.filter(a => ['Bank', 'Cash', 'E-Wallet', 'OtherLiquid'].includes(a.type))" :key="acc.id" :value="acc.id">
+                {{ acc.name }}
+              </option>
+            </select>
+          </div>
+
+          <!-- 同步修改帳戶餘額 Switch -->
+          <div v-if="realizedProfitForm.funding_account_id" style="display: flex; justify-content: space-between; align-items: center; background: rgba(0, 0, 0, 0.02); padding: 10px 14px; border-radius: 10px; border: 1px solid var(--color-card-border);">
+            <div style="display: flex; flex-direction: column; text-align: left;">
+              <span style="font-size: 0.82rem; font-weight: 700; color: var(--color-text);">同步修改帳戶餘額</span>
+            </div>
+            <label class="toggle-switch">
+              <input type="checkbox" v-model="realizedProfitForm.sync_account_balance" />
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </div>
+
+        <div style="display: flex; gap: 12px; margin-top: 6px;">
+          <button @click="showRealizedProfitModal = false" style="flex: 1; height: 42px; background: rgba(0, 0, 0, 0.05); color: var(--color-text); border: none; font-weight: 700; border-radius: 12px; cursor: pointer;">
+            取消
+          </button>
+          <button @click="submitRealizedProfitRecord" :disabled="!realizedProfitForm.symbol || realizedProfitForm.profit === ''" style="flex: 1; height: 42px; background: var(--color-primary); color: white; border: none; font-weight: 700; border-radius: 12px; cursor: pointer;" :style="{ opacity: (!realizedProfitForm.symbol || realizedProfitForm.profit === '') ? '0.5' : '1' }">
+            儲存補登記
+          </button>
+        </div>
+      </div>
+    </div>
+
     <!-- ── Manage Group Modal ── -->
     <div v-if="showManageGroupModal" class="modal-overlay" style="z-index: 3000; background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;">
       <div class="card" style="width: 90%; max-width: 420px; max-height: 80vh; padding: 1.5rem; border: 1px solid var(--color-card-border); background: var(--color-card-bg); box-shadow: var(--shadow-lg); display: flex; flex-direction: column; gap: 1.2rem; overflow: hidden; box-sizing: border-box;">
@@ -7684,10 +7865,16 @@ onUnmounted(() => {
                 <!-- Details -->
                 <div class="sub-item-info">
                   <div class="sub-item-name">{{ item.name }}</div>
-                  <div class="sub-item-desc" style="display: flex; align-items: center; flex-wrap: wrap;">
-                    <span>持有 {{ isHidden ? '••••' : item.qty }}, {{ item.currency }} {{ isHidden ? '••••' : item.current_price }}</span>
+                  <div class="sub-item-desc" style="display: flex; align-items: center; gap: 4px; flex-wrap: wrap;">
+                    <span>持有 {{ isHidden ? '••••' : item.qty }} 股</span>
+                    <span style="opacity: 0.5;">·</span>
+                    <span>現價 ${{ isHidden ? '••••' : item.current_price }}</span>
+                    <template v-if="item.avgCostNative && item.avgCostNative > 0">
+                      <span style="opacity: 0.5;">·</span>
+                      <span style="color: var(--color-primary); font-weight: 600;">均價 ${{ isHidden ? '••••' : Number(item.avgCostNative).toFixed(2).replace(/\.00$/, '') }}</span>
+                    </template>
                     <!-- Individual Stock ROI inside group -->
-                    <span v-if="item.pnlPct !== undefined" :style="{ color: item.pnl >= 0 ? '#2ebd59' : '#ff453a', fontWeight: 'bold', marginLeft: '6px' }">
+                    <span v-if="item.pnlPct !== undefined" :style="{ color: item.pnl >= 0 ? '#2ebd59' : '#ff453a', fontWeight: 'bold', marginLeft: '4px' }">
                       {{ item.pnl >= 0 ? '+' : '' }}{{ isHidden ? '••••' : Math.round(item.pnl).toLocaleString('zh-TW') }} ({{ item.pnl >= 0 ? '+' : '' }}{{ item.pnlPct.toFixed(2) }}%)
                     </span>
                   </div>
@@ -7764,28 +7951,48 @@ onUnmounted(() => {
             </div>
           </div>
 
-          <!-- Realized profit/loss badge if any -->
+          <!-- Realized profit/loss badge & Supplemental entry button -->
           <div 
-            v-if="moneyFlowAnalysis.tradeProfitText" 
             style="
-              margin-bottom: 28px; 
-              border-radius: 12px; 
-              padding: 12px 16px; 
+              margin-bottom: 24px; 
+              border-radius: 14px; 
+              padding: 14px 16px; 
               display: flex; 
               align-items: center; 
+              justify-content: space-between;
               background: rgba(0, 0, 0, 0.015);
               border: 1px solid var(--color-card-border);
             "
           >
-            <div style="display: flex; flex-direction: column; text-align: left; width: 100%;">
+            <div style="display: flex; flex-direction: column; text-align: left;">
               <span style="font-size: 0.72rem; color: var(--color-text-muted); font-weight: 800; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 4px;">本期交易損益</span>
               <span 
+                v-if="moneyFlowAnalysis.tradeProfitText"
                 style="font-size: 0.95rem; font-weight: 800;"
                 :style="{ color: moneyFlowAnalysis.tradeProfitText.includes('獲利') ? 'var(--color-success)' : 'var(--color-danger)' }"
               >
                 {{ moneyFlowAnalysis.tradeProfitText.replace('（', '').replace('）', '') }}
               </span>
+              <span v-else style="font-size: 0.85rem; color: var(--color-text-muted); font-weight: 600;">尚無交易紀錄</span>
             </div>
+            <button 
+              @click="openRealizedProfitModal()" 
+              style="
+                padding: 8px 14px; 
+                border-radius: 10px; 
+                background: rgba(46, 189, 89, 0.1); 
+                color: #2ec173; 
+                border: 1px solid rgba(46, 189, 89, 0.2); 
+                font-size: 0.8rem; 
+                font-weight: 700; 
+                cursor: pointer;
+                transition: opacity 0.2s;
+              "
+              onmouseover="this.style.opacity='0.85'"
+              onmouseout="this.style.opacity='1'"
+            >
+             補登記賣出損益
+            </button>
           </div>
 
           <!-- Section 1: Accounts Flow -->
