@@ -1155,17 +1155,15 @@ const submitAdjustShares = async () => {
     }
 
     if (finalQtyChange > 0) {
-      if (newAsset.value.funding_account_id) {
-        todayTransactions.value.push({
-          type: 'buy',
-          symbol: inv.symbol.toUpperCase(),
-          quantity: finalQtyChange,
-          price: buyPrice,
-          currency: lots[0].currency || 'TWD',
-          funding_account_id: newAsset.value.funding_account_id,
-          date: new Date().toISOString().split('T')[0]
-        })
-      }
+      todayTransactions.value.push({
+        type: 'buy',
+        symbol: inv.symbol.toUpperCase(),
+        quantity: finalQtyChange,
+        price: buyPrice,
+        currency: lots[0].currency || 'TWD',
+        funding_account_id: newAsset.value.funding_account_id || null,
+        date: new Date().toISOString().split('T')[0]
+      })
       const generatedId = 'local-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9)
       const nowStr = new Date().toISOString()
       const payload = {
@@ -1213,19 +1211,18 @@ const submitAdjustShares = async () => {
             profit = (buyPrice - Number(lot.average_cost || 0)) * qtySubtracted
           }
           
-          if (newAsset.value.funding_account_id) {
-            todayTransactions.value.push({
-              type: 'sell',
-              symbol: inv.symbol.toUpperCase(),
-              quantity: qtySubtracted,
-              price: buyPrice,
-              average_cost: Number(lot.average_cost || 0),
-              currency: lot.currency || 'TWD',
-              funding_account_id: newAsset.value.funding_account_id,
-              date: new Date().toISOString().split('T')[0],
-              profit: profit
-            })
-          }
+          todayTransactions.value.push({
+            type: 'sell',
+            symbol: inv.symbol.toUpperCase(),
+            quantity: qtySubtracted,
+            price: buyPrice,
+            average_cost: Number(lot.average_cost || 0),
+            currency: lot.currency || 'TWD',
+            funding_account_id: newAsset.value.funding_account_id || null,
+            date: new Date().toISOString().split('T')[0],
+            profit: profit
+          })
+
           lot.quantity -= remainingToSubtract
           remainingToSubtract = 0
           try {
@@ -1246,19 +1243,17 @@ const submitAdjustShares = async () => {
             profit = (buyPrice - Number(lot.average_cost || 0)) * qtySubtracted
           }
 
-          if (newAsset.value.funding_account_id) {
-            todayTransactions.value.push({
-              type: 'sell',
-              symbol: inv.symbol.toUpperCase(),
-              quantity: qtySubtracted,
-              price: buyPrice,
-              average_cost: Number(lot.average_cost || 0),
-              currency: lot.currency || 'TWD',
-              funding_account_id: newAsset.value.funding_account_id,
-              date: new Date().toISOString().split('T')[0],
-              profit: profit
-            })
-          }
+          todayTransactions.value.push({
+            type: 'sell',
+            symbol: inv.symbol.toUpperCase(),
+            quantity: qtySubtracted,
+            price: buyPrice,
+            average_cost: Number(lot.average_cost || 0),
+            currency: lot.currency || 'TWD',
+            funding_account_id: newAsset.value.funding_account_id || null,
+            date: new Date().toISOString().split('T')[0],
+            profit: profit
+          })
           remainingToSubtract -= lot.quantity
           lot.quantity = 0
           try {
@@ -2271,19 +2266,36 @@ const moneyFlowAnalysis = computed(() => {
     const inflowFlows = {}
     sellTxList.forEach(tx => {
       const fundId = tx.funding_account_id
-      if (fundId) {
-        const acc = accounts.value.find(a => a.id === fundId)
-        const accName = acc ? acc.name : '未知帳戶'
-        if (!inflowFlows[accName]) inflowFlows[accName] = {}
-        const sym = tx.symbol.toUpperCase()
-        const valTwd = Math.round(Number(tx.quantity || 0) * Number(tx.price || 0) * (tx.currency === 'USD' ? usdTwdRate.value : 1))
-        inflowFlows[accName][sym] = (inflowFlows[accName][sym] || 0) + valTwd
+      const acc = fundId ? accounts.value.find(a => a.id === fundId) : null
+      const accName = acc ? acc.name : '無連動帳戶 (僅記錄損益)'
+      if (!inflowFlows[accName]) inflowFlows[accName] = {}
+      const sym = tx.symbol.toUpperCase()
+      const rawVal = Number(tx.quantity || 0) * Number(tx.price || 0)
+      const amt = rawVal > 0 ? rawVal : Math.abs(Number(tx.profit || 0))
+      const valTwd = Math.round(amt * (tx.currency === 'USD' ? usdTwdRate.value : 1))
+      const profitTwd = Math.round(Number(tx.profit || 0) * (tx.currency === 'USD' ? usdTwdRate.value : 1))
+      
+      if (!inflowFlows[accName][sym]) {
+        inflowFlows[accName][sym] = { amount: 0, profit: 0, isPureProfit: rawVal === 0 }
       }
+      inflowFlows[accName][sym].amount += valTwd
+      inflowFlows[accName][sym].profit += profitTwd
     })
     
     Object.entries(inflowFlows).forEach(([accName, stocks]) => {
-      const stocksList = Object.entries(stocks).map(([sym, val]) => ({ symbol: sym, amount: val }))
-      const detailStr = Object.entries(stocks).map(([sym, val]) => `${sym} (${formatInvestNumber(val)} 元)`).join('、')
+      const stocksList = Object.entries(stocks).map(([sym, item]) => ({ 
+        symbol: sym, 
+        amount: item.amount, 
+        profit: item.profit,
+        isPureProfit: item.isPureProfit
+      }))
+      const detailStr = stocksList.map(s => {
+        if (s.isPureProfit) {
+          return `${s.symbol} (損益: ${s.profit >= 0 ? '+' : ''}${formatInvestNumber(s.profit)} 元)`
+        }
+        return `${s.symbol} (變現 ${formatInvestNumber(s.amount)} 元, 損益: ${s.profit >= 0 ? '+' : ''}${formatInvestNumber(s.profit)} 元)`
+      }).join('、')
+
       flowItems.push({
         type: 'sell',
         accountName: accName,
@@ -2306,7 +2318,9 @@ const moneyFlowAnalysis = computed(() => {
   let totalSellAmtTwd = 0
   if (sellTxList.length > 0) {
     sellTxList.forEach(tx => {
-      const valTwd = Math.round(Number(tx.quantity || 0) * Number(tx.price || 0) * (tx.currency === 'USD' ? usdTwdRate.value : 1))
+      const rawVal = Number(tx.quantity || 0) * Number(tx.price || 0)
+      const amt = rawVal > 0 ? rawVal : Math.abs(Number(tx.profit || 0))
+      const valTwd = Math.round(amt * (tx.currency === 'USD' ? usdTwdRate.value : 1))
       totalSellAmtTwd += valTwd
     })
   }
@@ -4633,6 +4647,8 @@ const showRealizedProfitModal = ref(false)
 const realizedProfitForm = ref({
   symbol: '',
   profit: '',
+  quantity: '',
+  price: '',
   currency: 'TWD',
   funding_account_id: null,
   sync_account_balance: false, // 預設關閉，避免重複加算已存在的帳戶餘額
@@ -4644,6 +4660,8 @@ const openRealizedProfitModal = (symbolStr = '') => {
   realizedProfitForm.value = {
     symbol: symbolStr ? symbolStr.toUpperCase() : '',
     profit: '',
+    quantity: '',
+    price: '',
     currency: 'TWD',
     funding_account_id: null,
     sync_account_balance: false,
@@ -4658,6 +4676,8 @@ const submitRealizedProfitRecord = async () => {
   
   const sym = realizedProfitForm.value.symbol.toUpperCase().trim()
   const profitVal = Number(realizedProfitForm.value.profit || 0)
+  const qtyVal = Number(realizedProfitForm.value.quantity || 0)
+  const priceVal = Number(realizedProfitForm.value.price || 0)
   const currencyVal = realizedProfitForm.value.currency || 'TWD'
   const fundId = realizedProfitForm.value.funding_account_id || null
   const syncBal = realizedProfitForm.value.sync_account_balance
@@ -4666,8 +4686,8 @@ const submitRealizedProfitRecord = async () => {
   const newTx = {
     type: 'sell',
     symbol: sym,
-    quantity: 0,
-    price: 0,
+    quantity: qtyVal,
+    price: priceVal,
     average_cost: 0,
     profit: profitVal,
     currency: currencyVal,
@@ -4683,10 +4703,11 @@ const submitRealizedProfitRecord = async () => {
   // 2. 只有在使用者開啟「同步修改帳戶餘額」時才更新帳戶金額
   if (fundId && syncBal) {
     const rate = currencyVal === 'USD' ? usdTwdRate.value : 1
-    const pnlTwd = Math.round(profitVal * rate)
+    const proceeds = (qtyVal > 0 && priceVal > 0) ? (qtyVal * priceVal) : profitVal
+    const proceedsTwd = Math.round(proceeds * rate)
     accounts.value = accounts.value.map(acc => {
       if (acc.id === fundId) {
-        return { ...acc, balance: Number(acc.balance || 0) + pnlTwd }
+        return { ...acc, balance: Number(acc.balance || 0) + proceedsTwd }
       }
       return acc
     })
@@ -4704,6 +4725,13 @@ const submitRealizedProfitRecord = async () => {
 
   // 4. 關閉彈窗
   showRealizedProfitModal.value = false
+}
+
+const removeTodayTransaction = async (index) => {
+  if (index < 0 || index >= todayTransactions.value.length) return
+  todayTransactions.value.splice(index, 1)
+  localStorage.setItem('today_transactions', JSON.stringify(todayTransactions.value))
+  await saveDailySnapshot(netWorth.value)
 }
 
 // Manage Group Modal State
@@ -5975,17 +6003,30 @@ onUnmounted(() => {
                   borderRadius: '4px',
                   fontSize: '0.68rem',
                   fontWeight: '800',
-                  color: tx.type === 'buy' ? 'var(--color-success)' : 'var(--color-danger)',
-                  background: tx.type === 'buy' ? 'rgba(46, 189, 89, 0.08)' : 'rgba(255, 69, 58, 0.08)'
+                  color: (tx.quantity === 0 && tx.profit !== undefined) ? '#a855f7' : (tx.type === 'buy' ? 'var(--color-success)' : 'var(--color-danger)'),
+                  background: (tx.quantity === 0 && tx.profit !== undefined) ? 'rgba(168, 85, 247, 0.1)' : (tx.type === 'buy' ? 'rgba(46, 189, 89, 0.08)' : 'rgba(255, 69, 58, 0.08)')
                 }">
-                  {{ tx.type === 'buy' ? '買入' : '賣出' }}
+                  {{ (tx.quantity === 0 && tx.profit !== undefined) ? '補登記' : (tx.type === 'buy' ? '買入' : '賣出') }}
                 </span>
                 <span style="font-weight: 700;">{{ tx.symbol }}</span>
-                <span style="color: var(--color-text-muted); font-size: 0.75rem;">{{ tx.quantity }} 股</span>
+                <span v-if="tx.quantity && tx.quantity > 0" style="color: var(--color-text-muted); font-size: 0.75rem;">{{ tx.quantity }} 股</span>
+                <span v-else style="color: var(--color-text-muted); font-size: 0.72rem;">({{ tx.remarks || '僅記錄損益' }})</span>
               </div>
-              <span style="font-family: 'Outfit', sans-serif; font-size: 0.8rem; color: var(--color-text-muted);">
-                價格: {{ tx.currency }} {{ tx.price || tx.buy_price }}
-              </span>
+              <div style="display: flex; flex-direction: column; align-items: flex-end; font-family: 'Outfit', sans-serif; font-size: 0.8rem;">
+                <template v-if="tx.profit !== undefined">
+                  <span :style="{ color: Number(tx.profit) >= 0 ? 'var(--color-success)' : 'var(--color-danger)', fontWeight: '700' }">
+                    損益: {{ Number(tx.profit) >= 0 ? '+' : '' }}{{ formatInvestNumber(tx.profit) }} {{ tx.currency || 'TWD' }}
+                  </span>
+                  <span v-if="tx.quantity > 0" style="font-size: 0.72rem; color: var(--color-text-muted); font-weight: 500;">
+                    單價: {{ tx.currency }} {{ tx.price || tx.buy_price }}
+                  </span>
+                </template>
+                <template v-else>
+                  <span style="color: var(--color-text-muted); font-weight: 600;">
+                    價格: {{ tx.currency }} {{ tx.price || tx.buy_price }}
+                  </span>
+                </template>
+              </div>
             </div>
           </div>
         </div>
@@ -7133,9 +7174,6 @@ onUnmounted(() => {
             <button class="pill-btn-white" @click="openModifyBalance()" style="flex: 1; padding: 12px 6px; border-radius: 50px; font-weight: 700; font-size: 0.88rem; background: var(--color-primary); color: #ffffff; border: none; cursor: pointer; transition: opacity 0.2s;" onmouseover="this.style.opacity='0.9'" onmouseout="this.style.opacity='1'">
               修改餘額
             </button>
-            <button @click="openRealizedProfitModal(selectedSymbol)" style="flex: 1; padding: 12px 6px; border-radius: 50px; font-weight: 700; font-size: 0.88rem; background: rgba(46, 189, 89, 0.1); color: #2ec173; border: 1px solid rgba(46, 189, 89, 0.2); cursor: pointer; transition: opacity 0.2s;" onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">
-              補登記損益
-            </button>
           </div>
 
           <!-- Change History List -->
@@ -7514,16 +7552,27 @@ onUnmounted(() => {
           </div>
 
           <div style="display: flex; gap: 10px;">
-            <div style="flex: 1;">
+            <div style="flex: 1; min-width: 0;">
+              <label style="font-size: 0.82rem; color: var(--color-text-muted); font-weight: 700; display: block; margin-bottom: 4px;">賣出股數 (選填，算變現金額)</label>
+              <input v-model.number="realizedProfitForm.quantity" type="number" step="any" placeholder="例如：10 (可留空)" style="width: 100%; min-width: 0; max-width: 100%; height: 42px; padding: 0 10px; border-radius: 10px; border: 1px solid var(--color-card-border); background: var(--color-bg); color: var(--color-text); font-size: 0.88rem; outline: none; box-sizing: border-box; -webkit-appearance: none; appearance: none;" />
+            </div>
+            <div style="flex: 1; min-width: 0;">
+              <label style="font-size: 0.82rem; color: var(--color-text-muted); font-weight: 700; display: block; margin-bottom: 4px;">賣出單價 (選填，算變現金額)</label>
+              <input v-model.number="realizedProfitForm.price" type="number" step="any" placeholder="例如：180 (可留空)" style="width: 100%; min-width: 0; max-width: 100%; height: 42px; padding: 0 10px; border-radius: 10px; border: 1px solid var(--color-card-border); background: var(--color-bg); color: var(--color-text); font-size: 0.88rem; outline: none; box-sizing: border-box; -webkit-appearance: none; appearance: none;" />
+            </div>
+          </div>
+
+          <div style="display: flex; gap: 10px;">
+            <div style="flex: 1; min-width: 0;">
               <label style="font-size: 0.82rem; color: var(--color-text-muted); font-weight: 700; display: block; margin-bottom: 4px;">幣別</label>
-              <select v-model="realizedProfitForm.currency" style="width: 100%; height: 42px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--color-card-border); background: var(--color-bg); color: var(--color-text); font-size: 0.88rem; outline: none; box-sizing: border-box;">
+              <select v-model="realizedProfitForm.currency" style="width: 100%; min-width: 0; max-width: 100%; height: 42px; padding: 0 8px; border-radius: 10px; border: 1px solid var(--color-card-border); background: var(--color-bg); color: var(--color-text); font-size: 0.85rem; outline: none; box-sizing: border-box; -webkit-appearance: none; appearance: none;">
                 <option value="TWD">TWD (新台幣)</option>
                 <option value="USD">USD (美金)</option>
               </select>
             </div>
-            <div style="flex: 1;">
+            <div style="flex: 1; min-width: 0;">
               <label style="font-size: 0.82rem; color: var(--color-text-muted); font-weight: 700; display: block; margin-bottom: 4px;">交易日期</label>
-              <input v-model="realizedProfitForm.date" type="date" style="width: 100%; height: 42px; padding: 0 10px; border-radius: 10px; border: 1px solid var(--color-card-border); background: var(--color-bg); color: var(--color-text); font-size: 0.85rem; outline: none; box-sizing: border-box;" />
+              <input v-model="realizedProfitForm.date" type="date" style="width: 100%; min-width: 0; max-width: 100%; height: 42px; padding: 0 8px; border-radius: 10px; border: 1px solid var(--color-card-border); background: var(--color-bg); color: var(--color-text); font-size: 0.82rem; outline: none; box-sizing: border-box; -webkit-appearance: none; appearance: none;" />
             </div>
           </div>
 
@@ -7960,15 +8009,17 @@ onUnmounted(() => {
               display: flex; 
               align-items: center; 
               justify-content: space-between;
+              gap: 12px;
+              flex-wrap: wrap;
               background: rgba(0, 0, 0, 0.015);
               border: 1px solid var(--color-card-border);
             "
           >
-            <div style="display: flex; flex-direction: column; text-align: left;">
+            <div style="display: flex; flex-direction: column; text-align: left; flex: 1; min-width: 140px;">
               <span style="font-size: 0.72rem; color: var(--color-text-muted); font-weight: 800; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 4px;">本期交易損益</span>
               <span 
                 v-if="moneyFlowAnalysis.tradeProfitText"
-                style="font-size: 0.95rem; font-weight: 800;"
+                style="font-size: 0.92rem; font-weight: 800; word-break: break-word;"
                 :style="{ color: moneyFlowAnalysis.tradeProfitText.includes('獲利') ? 'var(--color-success)' : 'var(--color-danger)' }"
               >
                 {{ moneyFlowAnalysis.tradeProfitText.replace('（', '').replace('）', '') }}
@@ -7986,13 +8037,41 @@ onUnmounted(() => {
                 font-size: 0.8rem; 
                 font-weight: 700; 
                 cursor: pointer;
+                white-space: nowrap;
+                flex-shrink: 0;
                 transition: opacity 0.2s;
               "
               onmouseover="this.style.opacity='0.85'"
               onmouseout="this.style.opacity='1'"
             >
-             補登記賣出損益
+              ＋ 補登記損益
             </button>
+          </div>
+
+          <!-- Today's / Recent Transactions List (with Delete capability) -->
+          <div v-if="todayTransactions.length > 0" style="margin-bottom: 24px; text-align: left;">
+            <div style="font-size: 0.75rem; font-weight: 800; color: var(--color-text-muted); margin-bottom: 10px; border-left: 2.5px solid #2ec173; padding-left: 8px; letter-spacing: 0.5px; text-transform: uppercase;">
+              當日交易與補登記紀錄
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 8px;">
+              <div v-for="(tx, idx) in todayTransactions" :key="idx" style="display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; background: rgba(0, 0, 0, 0.015); border: 1px solid var(--color-card-border); border-radius: 10px;">
+                <div style="display: flex; flex-direction: column;">
+                  <div style="display: flex; align-items: center; gap: 6px;">
+                    <span style="font-size: 0.85rem; font-weight: 700; color: var(--color-text);">{{ tx.symbol || '股票' }}</span>
+                    <span style="font-size: 0.72rem; color: var(--color-text-muted);">({{ tx.remarks || '補登記損益' }})</span>
+                  </div>
+                  <span style="font-size: 0.75rem; color: var(--color-text-muted); margin-top: 2px;">{{ tx.date }}</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 12px;">
+                  <span :style="{ color: Number(tx.profit || 0) >= 0 ? 'var(--color-success)' : 'var(--color-danger)', fontWeight: '800', fontSize: '0.88rem' }">
+                    {{ Number(tx.profit || 0) >= 0 ? '+' : '' }}{{ tx.profit }} {{ tx.currency || 'TWD' }}
+                  </span>
+                  <button @click="removeTodayTransaction(idx)" style="background: rgba(255, 69, 58, 0.1); color: var(--color-danger); border: none; padding: 4px 8px; border-radius: 6px; font-size: 0.75rem; font-weight: 700; cursor: pointer;">
+                    刪除
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
 
           <!-- Section 1: Accounts Flow -->
@@ -8061,7 +8140,15 @@ onUnmounted(() => {
                          }">
                       <span>{{ stock.symbol }}</span>
                       <span style="font-weight: 500; font-size: 0.72rem; opacity: 0.85;">
-                        {{ formatInvestNumber(stock.amount) }} 元
+                        <template v-if="stock.isPureProfit">
+                          損益: {{ stock.profit >= 0 ? '+' : '' }}{{ formatInvestNumber(stock.profit) }} 元
+                        </template>
+                        <template v-else-if="stock.profit !== undefined">
+                          變現 {{ formatInvestNumber(stock.amount) }} 元 (損益 {{ stock.profit >= 0 ? '+' : '' }}{{ formatInvestNumber(stock.profit) }} 元)
+                        </template>
+                        <template v-else>
+                          {{ formatInvestNumber(stock.amount) }} 元
+                        </template>
                       </span>
                     </div>
                   </div>
